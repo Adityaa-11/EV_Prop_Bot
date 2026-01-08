@@ -67,7 +67,20 @@ async def fetch_pp(session, league):
     league_id = LEAGUE_IDS.get(league.lower())
     if not league_id: return []
     url = f"https://api.prizepicks.com/projections?league_id={league_id}&per_page=250&single_stat=true"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Accept": "application/json"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Referer": "https://app.prizepicks.com/",
+        "Origin": "https://app.prizepicks.com",
+        "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"macOS"',
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-site",
+    }
     try:
         async with session.get(url, headers=headers) as r:
             if r.status != 200: return []
@@ -87,39 +100,46 @@ async def fetch_ud(session, league):
     sport = UD_SPORTS.get(league.lower())
     if not sport: return []
     
-    url = "https://api.underdogfantasy.com/beta/v5/over_under_lines"
+    url = "https://api.underdogfantasy.com/beta/v6/over_under_lines"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
         "Accept": "application/json",
     }
     try:
-        async with session.get(url, headers=headers) as r:
+        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as r:
             if r.status != 200: return []
             data = await r.json()
             
             props = []
+            games = {g["id"]: g for g in data.get("games", [])}
             appearances = {a["id"]: a for a in data.get("appearances", [])}
             players = {p["id"]: p for p in data.get("players", [])}
             
             for line in data.get("over_under_lines", []):
-                app_id = line.get("over_under", {}).get("appearance_stat", {}).get("appearance_id")
+                ou = line.get("over_under", {})
+                app_stat = ou.get("appearance_stat", {})
+                app_id = app_stat.get("appearance_id")
                 app = appearances.get(app_id, {})
                 
+                # Get game info via match_id
+                match_id = app.get("match_id")
+                game = games.get(match_id, {})
+                
                 # Filter by sport
-                if app.get("match", {}).get("sport_id", "").upper() != sport:
+                if game.get("sport_id", "").upper() != sport:
                     continue
                 
                 player_id = app.get("player_id")
                 player = players.get(player_id, {})
                 
-                stat_type = line.get("over_under", {}).get("appearance_stat", {}).get("stat")
+                stat_type = app_stat.get("display_stat") or app_stat.get("stat", "")
                 stat_value = line.get("stat_value")
                 
                 if player and stat_value:
                     props.append(Prop(
                         player=f"{player.get('first_name', '')} {player.get('last_name', '')}".strip(),
-                        team=app.get("match", {}).get("home_team_abbr", "") or "",
-                        stat=stat_type or "",
+                        team=game.get("title", "").split(" @ ")[0] if " @ " in game.get("title", "") else "",
+                        stat=stat_type,
                         line=float(stat_value),
                         league=league.upper(),
                         source="underdog"
