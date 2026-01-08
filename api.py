@@ -801,28 +801,37 @@ async def compare_player(
 
 @app.get("/api/games")
 async def get_games(
-    sport: str = Query("nba", description="Sport"),
+    sport: Optional[str] = Query(None, description="Sport (nba, nfl, mlb, nhl) or omit for all"),
 ):
     """Get today's games with prop counts (simplified for now)."""
-    # This would ideally come from a games API
-    # For now, we derive it from the props we have
     async with aiohttp.ClientSession() as session:
-        pp_props = await fetch_prizepicks(session, sport)
-        ud_props = await fetch_underdog(session, sport)
+        # If no sport specified or "all", fetch from all sports
+        if not sport or sport.lower() == "all":
+            sports_to_fetch = ["nba", "nfl", "mlb", "nhl"]
+        else:
+            sports_to_fetch = [sport.lower()]
         
-        # Group by team to estimate games
+        all_pp_props = []
+        all_ud_props = []
         teams = set()
-        for p in pp_props + ud_props:
-            if p.team:
-                teams.add(p.team)
+        
+        for s in sports_to_fetch:
+            pp_props = await fetch_prizepicks(session, s)
+            ud_props = await fetch_underdog(session, s)
+            all_pp_props.extend(pp_props)
+            all_ud_props.extend(ud_props)
+            
+            for p in pp_props + ud_props:
+                if p.team:
+                    teams.add(f"{p.team} ({s.upper()})" if len(sports_to_fetch) > 1 else p.team)
         
         return {
-            "sport": sport.upper(),
-            "teams_with_props": list(teams),
-            "total_props": len(pp_props) + len(ud_props),
+            "sport": "ALL" if len(sports_to_fetch) > 1 else sports_to_fetch[0].upper(),
+            "teams_with_props": sorted(list(teams)),
+            "total_props": len(all_pp_props) + len(all_ud_props),
             "platforms": {
-                "prizepicks": len(pp_props),
-                "underdog": len(ud_props),
+                "prizepicks": len(all_pp_props),
+                "underdog": len(all_ud_props),
             }
         }
 

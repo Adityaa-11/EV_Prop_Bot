@@ -178,8 +178,9 @@ export async function comparePlayer(playerName: string, sport: string = "nba") {
 }
 
 // Get games summary
-export async function getGames(sport: string = "nba"): Promise<GamesResponse> {
-  return fetchApi<GamesResponse>(`/api/games?sport=${sport}`)
+export async function getGames(sport: string = "all"): Promise<GamesResponse> {
+  const params = sport && sport !== "all" ? `?sport=${sport}` : ""
+  return fetchApi<GamesResponse>(`/api/games${params}`)
 }
 
 // Calculate no-vig odds

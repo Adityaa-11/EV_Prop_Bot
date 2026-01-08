@@ -12,7 +12,7 @@ export default function GamesPage() {
   const [data, setData] = useState<GamesResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [sport, setSport] = useState("nba")
+  const [sport, setSport] = useState("all")
 
   const currentDate = new Date().toLocaleDateString("en-US", {
     weekday: "long",
@@ -59,6 +59,7 @@ export default function GamesPage() {
             <SelectValue placeholder="Sport" />
           </SelectTrigger>
           <SelectContent>
+            <SelectItem value="all">All Sports</SelectItem>
             <SelectItem value="nba">NBA</SelectItem>
             <SelectItem value="nfl">NFL</SelectItem>
             <SelectItem value="mlb">MLB</SelectItem>
