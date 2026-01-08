@@ -241,18 +241,21 @@ async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Pro
     if not ud_sport:
         return []
     
-    url = "https://api.underdogfantasy.com/beta/v5/over_under_lines"
+    url = "https://api.underdogfantasy.com/beta/v6/over_under_lines"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "application/json",
     }
     
     try:
-        async with session.get(url, headers=headers, timeout=10) as resp:
+        async with session.get(url, headers=headers, timeout=15) as resp:
             if resp.status != 200:
                 return []
             
             data = await resp.json()
+            
+            # Build lookup dictionaries
+            games = {g["id"]: g for g in data.get("games", [])}
             appearances = {a["id"]: a for a in data.get("appearances", [])}
             players = {p["id"]: p for p in data.get("players", [])}
             
@@ -263,15 +266,18 @@ async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Pro
                 app_id = app_stat.get("appearance_id")
                 app = appearances.get(app_id, {})
                 
+                # Get game info via match_id
+                match_id = app.get("match_id")
+                game = games.get(match_id, {})
+                
                 # Filter by sport
-                match = app.get("match", {})
-                if match.get("sport_id", "").upper() != ud_sport:
+                if game.get("sport_id", "").upper() != ud_sport:
                     continue
                 
                 player_id = app.get("player_id")
                 player = players.get(player_id, {})
                 
-                stat_type = app_stat.get("stat")
+                stat_type = app_stat.get("display_stat") or app_stat.get("stat", "")
                 stat_value = line.get("stat_value")
                 
                 if player and stat_value:
@@ -279,12 +285,12 @@ async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Pro
                     props.append(Prop(
                         id=f"ud_{line.get('id', '')}",
                         player_name=name,
-                        team=match.get("home_team_abbr", "") or "",
+                        team=game.get("title", "").split(" @ ")[0] if " @ " in game.get("title", "") else "",
                         sport=sport.upper(),
-                        stat_type=stat_type or "",
+                        stat_type=stat_type,
                         platform="underdog",
                         line=float(stat_value),
-                        game_time=match.get("scheduled_at", ""),
+                        game_time=game.get("scheduled_at", ""),
                     ))
             
             return props
