@@ -67,6 +67,9 @@ PP_LEAGUE_IDS = {
 # Underdog Sport mappings
 UD_SPORTS = {"nba": "NBA", "nfl": "NFL", "mlb": "MLB", "nhl": "NHL"}
 
+# Main sports for "all" queries
+MAIN_SPORTS = ["nba", "nfl", "mlb", "nhl"]
+
 # The Odds API sport keys
 ODDS_API_SPORTS = {
     "nba": "basketball_nba",
@@ -573,7 +576,7 @@ async def get_odds_api_usage():
 
 @app.get("/api/props")
 async def get_props(
-    sport: str = Query("nba", description="Sport to fetch (nba, nfl, mlb, nhl)"),
+    sport: str = Query("nba", description="Sport to fetch (nba, nfl, mlb, nhl, all)"),
     platform: Optional[str] = Query(None, description="Filter by platform"),
     stat: Optional[str] = Query(None, description="Filter by stat type"),
     min_ev: Optional[float] = Query(None, description="Minimum EV percentage"),
@@ -581,13 +584,18 @@ async def get_props(
 ):
     """Get all props across platforms with optional filters."""
     async with aiohttp.ClientSession() as session:
-        # Fetch from all platforms concurrently
-        tasks = [
-            fetch_prizepicks(session, sport),
-            fetch_underdog(session, sport),
-            fetch_betr_picks(session, sport),
-            fetch_chalkboard(session, sport),
-        ]
+        # Determine which sports to fetch
+        sports_to_fetch = MAIN_SPORTS if sport.lower() == "all" else [sport.lower()]
+        
+        # Fetch from all platforms concurrently for all sports
+        tasks = []
+        for s in sports_to_fetch:
+            tasks.extend([
+                fetch_prizepicks(session, s),
+                fetch_underdog(session, s),
+                fetch_betr_picks(session, s),
+                fetch_chalkboard(session, s),
+            ])
         results = await asyncio.gather(*tasks)
         
         # Combine all props
@@ -614,42 +622,50 @@ async def get_props(
 
 @app.get("/api/ev")
 async def get_ev_plays(
-    sport: str = Query("nba", description="Sport to analyze"),
+    sport: str = Query("nba", description="Sport to analyze (nba, nfl, mlb, nhl, all)"),
     platform: Optional[str] = Query(None, description="Filter by platform"),
     min_ev: float = Query(0, description="Minimum EV percentage"),
     min_win: float = Query(54, description="Minimum win probability"),
 ):
     """Get +EV plays with sharp odds analysis. Prioritizes DraftKings/FanDuel lines."""
     async with aiohttp.ClientSession() as session:
-        # Fetch props from all platforms
-        pp_props = await fetch_prizepicks(session, sport)
-        ud_props = await fetch_underdog(session, sport)
-        betr_props = await fetch_betr_picks(session, sport)
-        chalk_props = await fetch_chalkboard(session, sport)
+        # Determine which sports to fetch
+        sports_to_fetch = MAIN_SPORTS if sport.lower() == "all" else [sport.lower()]
         
-        all_props = pp_props + ud_props + betr_props + chalk_props
+        # Fetch props from all platforms for all sports
+        all_props = []
+        for s in sports_to_fetch:
+            pp_props = await fetch_prizepicks(session, s)
+            ud_props = await fetch_underdog(session, s)
+            betr_props = await fetch_betr_picks(session, s)
+            chalk_props = await fetch_chalkboard(session, s)
+            all_props.extend(pp_props + ud_props + betr_props + chalk_props)
         
         if platform:
             all_props = [p for p in all_props if p.platform == platform.lower()]
         
         if not all_props:
-            return {"count": 0, "plays": []}
+            return {"count": 0, "plays": [], "sharp_books_used": []}
         
-        # Get unique markets needed
-        markets = set()
+        # Get unique markets needed per sport
+        markets_by_sport = {}
         for prop in all_props:
             market = PROP_MAPPINGS.get(prop.stat_type)
             if market:
-                markets.add(market)
+                if prop.sport not in markets_by_sport:
+                    markets_by_sport[prop.sport] = set()
+                markets_by_sport[prop.sport].add(market)
         
-        # Fetch sharp odds for each market (prioritizes DraftKings/FanDuel)
+        # Fetch sharp odds for each sport and market (prioritizes DraftKings/FanDuel)
         all_odds = []
-        for market in list(markets)[:5]:  # Limit API calls
-            odds = await fetch_sharp_odds(session, sport, market)
-            all_odds.extend(odds)
+        for s in sports_to_fetch:
+            sport_markets = markets_by_sport.get(s.upper(), set())
+            for market in list(sport_markets)[:3]:  # Limit API calls per sport
+                odds = await fetch_sharp_odds(session, s, market)
+                all_odds.extend(odds)
         
         if not all_odds:
-            return {"count": 0, "plays": [], "error": "Could not fetch sharp odds"}
+            return {"count": 0, "plays": [], "sharp_books_used": [], "error": "Could not fetch sharp odds"}
         
         # Analyze each prop
         ev_plays = []
@@ -711,7 +727,7 @@ async def get_ev_plays(
         
         return {
             "count": len(ev_plays),
-            "sport": sport.upper(),
+            "sport": "ALL" if sport.lower() == "all" else sport.upper(),
             "sharp_books_used": list(set(p["sharp_odds"]["bookmaker"] for p in ev_plays)),
             "plays": ev_plays
         }
@@ -719,18 +735,24 @@ async def get_ev_plays(
 
 @app.get("/api/middles")
 async def get_middles(
-    sport: str = Query("nba", description="Sport to analyze"),
+    sport: str = Query("nba", description="Sport to analyze (nba, nfl, mlb, nhl, all)"),
     min_spread: float = Query(0.5, description="Minimum spread between lines"),
 ):
     """Find middle/arbitrage opportunities across platforms."""
     async with aiohttp.ClientSession() as session:
-        # Fetch from all platforms
-        pp_props = await fetch_prizepicks(session, sport)
-        ud_props = await fetch_underdog(session, sport)
+        # Determine which sports to fetch
+        sports_to_fetch = MAIN_SPORTS if sport.lower() == "all" else [sport.lower()]
         
-        # Group props by player + stat
+        # Fetch from all platforms for all sports
+        pp_props = []
+        ud_props = []
+        for s in sports_to_fetch:
+            pp_props.extend(await fetch_prizepicks(session, s))
+            ud_props.extend(await fetch_underdog(session, s))
+        
+        # Group props by player + stat + sport
         def key(p):
-            return (p.player_name.lower().strip(), p.stat_type.lower())
+            return (p.player_name.lower().strip(), p.stat_type.lower(), p.sport.lower())
         
         pp_by_key = {key(p): p for p in pp_props}
         ud_by_key = {key(p): p for p in ud_props}

@@ -12,7 +12,7 @@ export default function EVPlaysPage() {
   const [data, setData] = useState<EVResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [sport, setSport] = useState("nba")
+  const [sport, setSport] = useState("all")
   const [platform, setPlatform] = useState<string | undefined>(undefined)
 
   const fetchData = async () => {
@@ -57,6 +57,7 @@ export default function EVPlaysPage() {
             <SelectValue placeholder="Sport" />
           </SelectTrigger>
           <SelectContent>
+            <SelectItem value="all">All Sports</SelectItem>
             <SelectItem value="nba">NBA</SelectItem>
             <SelectItem value="nfl">NFL</SelectItem>
             <SelectItem value="mlb">MLB</SelectItem>
