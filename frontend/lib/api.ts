@@ -131,7 +131,6 @@ export interface OddsUsageResponse {
   requests_used?: number
   requests_remaining?: number
   requests_total?: number
-  api_key_preview?: string
   error?: string
 }
 

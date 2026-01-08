@@ -568,7 +568,6 @@ async def get_odds_api_usage():
                     "requests_used": int(requests_used) if requests_used.isdigit() else requests_used,
                     "requests_remaining": int(requests_remaining) if requests_remaining.isdigit() else requests_remaining,
                     "requests_total": 500,  # Free tier limit
-                    "api_key_preview": f"{ODDS_API_KEY[:8]}...{ODDS_API_KEY[-4:]}" if len(ODDS_API_KEY) > 12 else "***"
                 }
         except Exception as e:
             return {"error": str(e), "configured": True}

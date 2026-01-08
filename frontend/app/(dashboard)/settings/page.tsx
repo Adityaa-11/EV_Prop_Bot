@@ -222,11 +222,6 @@ export default function SettingsPage() {
                     <span>Running low on API requests! Consider using a backup API key.</span>
                   </div>
                 )}
-
-                <div className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
-                  <p className="font-medium">Active API Key</p>
-                  <p className="mt-1 font-mono">{oddsUsage.api_key_preview}</p>
-                </div>
               </>
             ) : (
               <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
