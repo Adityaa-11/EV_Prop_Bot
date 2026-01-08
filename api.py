@@ -542,6 +542,35 @@ async def health():
     }
 
 
+@app.get("/api/odds-usage")
+async def get_odds_api_usage():
+    """Check The Odds API usage/remaining requests."""
+    if not ODDS_API_KEY:
+        return {"error": "ODDS_API_KEY not configured", "configured": False}
+    
+    # Make a lightweight request to check usage (sports list is free and returns headers)
+    async with aiohttp.ClientSession() as session:
+        try:
+            url = "https://api.the-odds-api.com/v4/sports"
+            async with session.get(url, params={"apiKey": ODDS_API_KEY}) as resp:
+                if resp.status == 401:
+                    return {"error": "Invalid API key", "configured": True}
+                
+                # Extract usage from headers
+                requests_remaining = resp.headers.get("x-requests-remaining", "unknown")
+                requests_used = resp.headers.get("x-requests-used", "unknown")
+                
+                return {
+                    "configured": True,
+                    "requests_used": int(requests_used) if requests_used.isdigit() else requests_used,
+                    "requests_remaining": int(requests_remaining) if requests_remaining.isdigit() else requests_remaining,
+                    "requests_total": 500,  # Free tier limit
+                    "api_key_preview": f"{ODDS_API_KEY[:8]}...{ODDS_API_KEY[-4:]}" if len(ODDS_API_KEY) > 12 else "***"
+                }
+        except Exception as e:
+            return {"error": str(e), "configured": True}
+
+
 @app.get("/api/props")
 async def get_props(
     sport: str = Query("nba", description="Sport to fetch (nba, nfl, mlb, nhl)"),

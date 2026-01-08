@@ -8,13 +8,16 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
-import { CheckCircle2, XCircle, Loader2 } from "lucide-react"
-import { checkHealth, type HealthResponse } from "@/lib/api"
+import { CheckCircle2, XCircle, Loader2, RefreshCw, AlertTriangle } from "lucide-react"
+import { checkHealth, getOddsUsage, type HealthResponse, type OddsUsageResponse } from "@/lib/api"
+import { Progress } from "@/components/ui/progress"
 
 export default function SettingsPage() {
   const [health, setHealth] = React.useState<HealthResponse | null>(null)
   const [healthLoading, setHealthLoading] = React.useState(true)
   const [healthError, setHealthError] = React.useState<string | null>(null)
+  const [oddsUsage, setOddsUsage] = React.useState<OddsUsageResponse | null>(null)
+  const [usageLoading, setUsageLoading] = React.useState(true)
 
   const checkApiHealth = async () => {
     setHealthLoading(true)
@@ -29,8 +32,21 @@ export default function SettingsPage() {
     }
   }
 
+  const fetchOddsUsage = async () => {
+    setUsageLoading(true)
+    try {
+      const result = await getOddsUsage()
+      setOddsUsage(result)
+    } catch (err) {
+      console.error("Failed to fetch odds usage:", err)
+    } finally {
+      setUsageLoading(false)
+    }
+  }
+
   React.useEffect(() => {
     checkApiHealth()
+    fetchOddsUsage()
   }, [])
 
   return (
@@ -123,6 +139,98 @@ export default function SettingsPage() {
                 <p className="font-medium">Connection Error</p>
                 <p className="mt-1">{healthError}</p>
                 <p className="mt-2 text-xs">Make sure the API server is running and accessible.</p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Odds API Usage */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle>Odds API Usage</CardTitle>
+                <CardDescription>Monthly API request quota (resets every month)</CardDescription>
+              </div>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={fetchOddsUsage} 
+                disabled={usageLoading}
+                className="gap-1"
+              >
+                <RefreshCw className={`h-3 w-3 ${usageLoading ? "animate-spin" : ""}`} />
+                Refresh
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {usageLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : oddsUsage?.error ? (
+              <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                <p className="font-medium">Error</p>
+                <p className="mt-1">{oddsUsage.error}</p>
+              </div>
+            ) : oddsUsage?.configured ? (
+              <>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Requests Used</span>
+                    <span className="font-mono font-semibold">
+                      {oddsUsage.requests_used} / {oddsUsage.requests_total}
+                    </span>
+                  </div>
+                  <Progress 
+                    value={((oddsUsage.requests_used || 0) / (oddsUsage.requests_total || 500)) * 100} 
+                    className="h-3"
+                  />
+                </div>
+
+                <div className="grid gap-4 pt-2 sm:grid-cols-3">
+                  <div className="rounded-lg bg-muted p-3">
+                    <Label className="text-xs text-muted-foreground">Used</Label>
+                    <div className="mt-1 font-mono text-2xl font-bold text-orange-500">
+                      {oddsUsage.requests_used}
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-muted p-3">
+                    <Label className="text-xs text-muted-foreground">Remaining</Label>
+                    <div className={`mt-1 font-mono text-2xl font-bold ${
+                      (oddsUsage.requests_remaining || 0) < 50 
+                        ? "text-red-500" 
+                        : (oddsUsage.requests_remaining || 0) < 150 
+                          ? "text-yellow-500" 
+                          : "text-green-500"
+                    }`}>
+                      {oddsUsage.requests_remaining}
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-muted p-3">
+                    <Label className="text-xs text-muted-foreground">Monthly Limit</Label>
+                    <div className="mt-1 font-mono text-2xl font-bold">
+                      {oddsUsage.requests_total}
+                    </div>
+                  </div>
+                </div>
+
+                {(oddsUsage.requests_remaining || 0) < 50 && (
+                  <div className="flex items-center gap-2 rounded-md bg-yellow-500/10 p-3 text-sm text-yellow-600 dark:text-yellow-400">
+                    <AlertTriangle className="h-4 w-4" />
+                    <span>Running low on API requests! Consider using a backup API key.</span>
+                  </div>
+                )}
+
+                <div className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
+                  <p className="font-medium">Active API Key</p>
+                  <p className="mt-1 font-mono">{oddsUsage.api_key_preview}</p>
+                </div>
+              </>
+            ) : (
+              <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
+                Odds API key not configured. Set <code className="rounded bg-background px-1 py-0.5">ODDS_API_KEY</code> in your .env file.
               </div>
             )}
           </CardContent>

@@ -125,6 +125,20 @@ export async function checkHealth(): Promise<HealthResponse> {
   return fetchApi<HealthResponse>("/api/health")
 }
 
+// Odds API usage
+export interface OddsUsageResponse {
+  configured: boolean
+  requests_used?: number
+  requests_remaining?: number
+  requests_total?: number
+  api_key_preview?: string
+  error?: string
+}
+
+export async function getOddsUsage(): Promise<OddsUsageResponse> {
+  return fetchApi<OddsUsageResponse>("/api/odds-usage")
+}
+
 // Get all props
 export async function getProps(params: {
   sport?: string
