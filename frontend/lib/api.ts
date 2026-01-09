@@ -132,10 +132,54 @@ export interface OddsUsageResponse {
   requests_remaining?: number
   requests_total?: number
   error?: string
+  auto_rotation?: {
+    enabled: boolean
+    total_keys: number
+    current_key: number
+  }
 }
 
 export async function getOddsUsage(): Promise<OddsUsageResponse> {
   return fetchApi<OddsUsageResponse>("/api/odds-usage")
+}
+
+// All keys usage
+export interface KeyUsage {
+  key_number: number
+  key_preview: string
+  status: "active" | "depleted" | "invalid" | "error"
+  requests_used: number
+  requests_remaining: number
+  error?: string
+}
+
+export interface AllKeysUsageResponse {
+  current_key: number
+  total_keys: number
+  keys: KeyUsage[]
+  total_remaining: number
+}
+
+export async function getAllKeysUsage(): Promise<AllKeysUsageResponse> {
+  return fetchApi<AllKeysUsageResponse>("/api/all-keys-usage")
+}
+
+// Rotate key
+export interface RotateKeyResponse {
+  success: boolean
+  previous_key?: number
+  current_key: number
+  total_keys: number
+  message?: string
+}
+
+export async function rotateKey(): Promise<RotateKeyResponse> {
+  return fetchApi<RotateKeyResponse>("/api/rotate-key", { method: "POST" })
+}
+
+// Set specific key
+export async function setKey(keyIndex: number): Promise<RotateKeyResponse> {
+  return fetchApi<RotateKeyResponse>(`/api/set-key/${keyIndex}`, { method: "POST" })
 }
 
 // Get all props

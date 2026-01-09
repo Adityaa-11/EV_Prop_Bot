@@ -8,8 +8,8 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
-import { CheckCircle2, XCircle, Loader2, RefreshCw, AlertTriangle } from "lucide-react"
-import { checkHealth, getOddsUsage, type HealthResponse, type OddsUsageResponse } from "@/lib/api"
+import { CheckCircle2, XCircle, Loader2, RefreshCw, AlertTriangle, Key, RotateCw } from "lucide-react"
+import { checkHealth, getOddsUsage, getAllKeysUsage, setKey, type HealthResponse, type OddsUsageResponse, type AllKeysUsageResponse } from "@/lib/api"
 import { Progress } from "@/components/ui/progress"
 
 export default function SettingsPage() {
@@ -18,6 +18,9 @@ export default function SettingsPage() {
   const [healthError, setHealthError] = React.useState<string | null>(null)
   const [oddsUsage, setOddsUsage] = React.useState<OddsUsageResponse | null>(null)
   const [usageLoading, setUsageLoading] = React.useState(true)
+  const [allKeys, setAllKeys] = React.useState<AllKeysUsageResponse | null>(null)
+  const [keysLoading, setKeysLoading] = React.useState(false)
+  const [switching, setSwitching] = React.useState<number | null>(null)
 
   const checkApiHealth = async () => {
     setHealthLoading(true)
@@ -41,6 +44,31 @@ export default function SettingsPage() {
       console.error("Failed to fetch odds usage:", err)
     } finally {
       setUsageLoading(false)
+    }
+  }
+
+  const fetchAllKeys = async () => {
+    setKeysLoading(true)
+    try {
+      const result = await getAllKeysUsage()
+      setAllKeys(result)
+    } catch (err) {
+      console.error("Failed to fetch all keys:", err)
+    } finally {
+      setKeysLoading(false)
+    }
+  }
+
+  const handleSetKey = async (keyIndex: number) => {
+    setSwitching(keyIndex)
+    try {
+      await setKey(keyIndex)
+      await fetchAllKeys()
+      await fetchOddsUsage()
+    } catch (err) {
+      console.error("Failed to switch key:", err)
+    } finally {
+      setSwitching(null)
     }
   }
 
@@ -227,6 +255,125 @@ export default function SettingsPage() {
               <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
                 Odds API key not configured. Set <code className="rounded bg-background px-1 py-0.5">ODDS_API_KEY</code> in your .env file.
               </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* API Key Manager */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <Key className="h-5 w-5" />
+                  API Key Manager
+                </CardTitle>
+                <CardDescription>Manage multiple Odds API keys with auto-rotation</CardDescription>
+              </div>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={fetchAllKeys} 
+                disabled={keysLoading}
+                className="gap-1"
+              >
+                <RefreshCw className={`h-3 w-3 ${keysLoading ? "animate-spin" : ""}`} />
+                Check All Keys
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {!allKeys && !keysLoading && (
+              <div className="text-center py-6">
+                <p className="text-sm text-muted-foreground mb-3">Click "Check All Keys" to see usage for all your API keys</p>
+                <Button onClick={fetchAllKeys} variant="secondary">
+                  <Key className="mr-2 h-4 w-4" />
+                  Load Key Status
+                </Button>
+              </div>
+            )}
+
+            {keysLoading && (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            )}
+
+            {allKeys && !keysLoading && (
+              <>
+                <div className="flex items-center justify-between text-sm mb-4">
+                  <span className="text-muted-foreground">Total Remaining Across All Keys</span>
+                  <span className="font-mono font-bold text-lg text-green-500">{allKeys.total_remaining}</span>
+                </div>
+
+                <div className="space-y-3">
+                  {allKeys.keys.map((key) => (
+                    <div 
+                      key={key.key_number}
+                      className={`rounded-lg border p-4 ${
+                        key.key_number === allKeys.current_key 
+                          ? "border-green-500 bg-green-500/5" 
+                          : "border-muted"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold">Key {key.key_number}</span>
+                          {key.key_number === allKeys.current_key && (
+                            <Badge variant="default" className="bg-green-600 text-xs">Active</Badge>
+                          )}
+                          <Badge 
+                            variant={key.status === "active" ? "secondary" : "destructive"}
+                            className="text-xs"
+                          >
+                            {key.status}
+                          </Badge>
+                        </div>
+                        {key.key_number !== allKeys.current_key && key.status === "active" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleSetKey(key.key_number)}
+                            disabled={switching !== null}
+                            className="gap-1"
+                          >
+                            {switching === key.key_number ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <RotateCw className="h-3 w-3" />
+                            )}
+                            Switch
+                          </Button>
+                        )}
+                      </div>
+                      
+                      <div className="text-xs text-muted-foreground font-mono mb-2">
+                        {key.key_preview}
+                      </div>
+                      
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-xs">
+                          <span>Used: {key.requests_used}</span>
+                          <span>Remaining: {key.requests_remaining}</span>
+                        </div>
+                        <Progress 
+                          value={(key.requests_used / 500) * 100} 
+                          className={`h-2 ${key.requests_remaining === 0 ? "[&>div]:bg-red-500" : ""}`}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
+                  <p className="font-medium mb-1">💡 Tips:</p>
+                  <ul className="list-disc list-inside space-y-1">
+                    <li>Each key has 500 requests/month</li>
+                    <li>Auto-rotation triggers when a key has {"<"}10 requests left</li>
+                    <li>Add more keys in Railway: ODDS_API_KEY_1, ODDS_API_KEY_2, etc.</li>
+                  </ul>
+                </div>
+              </>
             )}
           </CardContent>
         </Card>

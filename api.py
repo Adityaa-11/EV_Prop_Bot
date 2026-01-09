@@ -787,6 +787,66 @@ async def force_rotate_key():
     }
 
 
+@app.post("/api/set-key/{key_index}")
+async def set_specific_key(key_index: int):
+    """Switch to a specific API key by index (1-based)."""
+    if key_index < 1 or key_index > len(api_key_manager.keys):
+        return {"success": False, "error": f"Invalid key index. Must be 1-{len(api_key_manager.keys)}"}
+    
+    api_key_manager.current_index = key_index - 1
+    return {
+        "success": True,
+        "current_key": key_index,
+        "total_keys": len(api_key_manager.keys),
+    }
+
+
+@app.get("/api/all-keys-usage")
+async def get_all_keys_usage():
+    """Check usage for ALL API keys."""
+    results = []
+    
+    async with aiohttp.ClientSession() as session:
+        for i, key in enumerate(api_key_manager.keys):
+            try:
+                url = "https://api.the-odds-api.com/v4/sports"
+                async with session.get(url, params={"apiKey": key}, timeout=10) as resp:
+                    if resp.status == 401:
+                        results.append({
+                            "key_number": i + 1,
+                            "key_preview": f"{key[:6]}...{key[-4:]}",
+                            "status": "invalid",
+                            "requests_used": 0,
+                            "requests_remaining": 0,
+                        })
+                    else:
+                        remaining = resp.headers.get("x-requests-remaining", "0")
+                        used = resp.headers.get("x-requests-used", "0")
+                        results.append({
+                            "key_number": i + 1,
+                            "key_preview": f"{key[:6]}...{key[-4:]}",
+                            "status": "active" if int(remaining) > 0 else "depleted",
+                            "requests_used": int(used) if str(used).isdigit() else 0,
+                            "requests_remaining": int(remaining) if str(remaining).isdigit() else 0,
+                        })
+            except Exception as e:
+                results.append({
+                    "key_number": i + 1,
+                    "key_preview": f"{key[:6]}...{key[-4:]}",
+                    "status": "error",
+                    "error": str(e),
+                    "requests_used": 0,
+                    "requests_remaining": 0,
+                })
+    
+    return {
+        "current_key": api_key_manager.current_index + 1,
+        "total_keys": len(api_key_manager.keys),
+        "keys": results,
+        "total_remaining": sum(k.get("requests_remaining", 0) for k in results),
+    }
+
+
 @app.get("/api/odds-usage")
 async def get_odds_api_usage():
     """Check The Odds API usage/remaining requests."""
