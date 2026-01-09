@@ -73,6 +73,7 @@ export default function EVPlaysPage() {
             <SelectItem value="all">All Platforms</SelectItem>
             <SelectItem value="prizepicks">PrizePicks</SelectItem>
             <SelectItem value="underdog">Underdog</SelectItem>
+            <SelectItem value="betr">Betr</SelectItem>
           </SelectContent>
         </Select>
       </div>
