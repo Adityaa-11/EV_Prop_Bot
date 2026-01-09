@@ -21,7 +21,6 @@ import asyncio
 from datetime import datetime, timedelta
 from fuzzywuzzy import fuzz
 import os
-import hashlib
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -30,84 +29,8 @@ load_dotenv()
 # CONFIGURATION
 # =============================================================================
 
+ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
-
-# =============================================================================
-# API KEY MANAGER - Automatic rotation when quota runs out
-# =============================================================================
-
-class OddsAPIKeyManager:
-    """Manages multiple Odds API keys with automatic rotation."""
-    
-    def __init__(self):
-        self.keys = []
-        self.current_index = 0
-        self.key_usage = {}  # Track usage per key
-        
-        # Load keys from environment
-        # Supports: ODDS_API_KEY, ODDS_API_KEY_1, ODDS_API_KEY_2, etc.
-        primary_key = os.getenv("ODDS_API_KEY")
-        if primary_key:
-            self.keys.append(primary_key)
-        
-        # Load numbered backup keys
-        for i in range(1, 10):  # Support up to 9 backup keys
-            key = os.getenv(f"ODDS_API_KEY_{i}")
-            if key and key not in self.keys:
-                self.keys.append(key)
-        
-        print(f"[API Keys] Loaded {len(self.keys)} Odds API key(s)")
-    
-    @property
-    def current_key(self) -> str | None:
-        """Get the current active API key."""
-        if not self.keys:
-            return None
-        return self.keys[self.current_index]
-    
-    def rotate_key(self) -> bool:
-        """Rotate to the next available key. Returns True if successful."""
-        if len(self.keys) <= 1:
-            return False
-        
-        old_index = self.current_index
-        self.current_index = (self.current_index + 1) % len(self.keys)
-        
-        # Skip back to original if we've cycled through all
-        if self.current_index == old_index:
-            return False
-        
-        print(f"[API Keys] Rotated from key {old_index + 1} to key {self.current_index + 1}")
-        return True
-    
-    def update_usage(self, remaining: int, used: int):
-        """Update usage tracking for current key."""
-        if self.current_key:
-            self.key_usage[self.current_key[:8]] = {
-                "remaining": remaining,
-                "used": used,
-            }
-            
-            # Auto-rotate if running low (less than 10 requests)
-            if remaining < 10 and len(self.keys) > 1:
-                print(f"[API Keys] Key {self.current_index + 1} running low ({remaining} remaining), rotating...")
-                self.rotate_key()
-    
-    def get_status(self) -> dict:
-        """Get status of all keys."""
-        return {
-            "total_keys": len(self.keys),
-            "current_key_index": self.current_index + 1,
-            "current_key_preview": f"{self.current_key[:8]}..." if self.current_key else None,
-            "usage": self.key_usage,
-        }
-
-# Initialize the key manager
-api_key_manager = OddsAPIKeyManager()
-
-# Helper function to get current key (always fresh)
-def get_odds_api_key() -> str | None:
-    return api_key_manager.current_key
 
 app = FastAPI(
     title="EV Dashboard API",
@@ -269,7 +192,7 @@ class GameSummary(BaseModel):
 # PLATFORM FETCHERS
 # =============================================================================
 
-async def fetch_prizepicks_direct(session: aiohttp.ClientSession, sport: str) -> list[Prop]:
+async def fetch_prizepicks(session: aiohttp.ClientSession, sport: str) -> list[Prop]:
     """Fetch props from PrizePicks API."""
     league_id = PP_LEAGUE_IDS.get(sport.lower())
     if not league_id:
@@ -320,173 +243,6 @@ async def fetch_prizepicks_direct(session: aiohttp.ClientSession, sport: str) ->
     except Exception as e:
         print(f"PrizePicks error: {e}")
         return []
-
-
-
-# -------------------------------
-# DFS via The Odds API (us_dfs)
-# -------------------------------
-
-DFS_BOOKMAKER_KEYS = {
-    "prizepicks": "prizepicks",
-    "betr": "betr_us_dfs",
-}
-
-DFS_MARKETS_BY_SPORT: dict[str, list[str]] = {
-    "nba": [
-        "player_points",
-        "player_rebounds",
-        "player_assists",
-        "player_threes",
-        "player_points_rebounds_assists",
-        "player_steals",
-        "player_blocks",
-        "player_turnovers",
-    ],
-    "nfl": [
-        "player_pass_yds",
-        "player_rush_yds",
-        "player_reception_yds",
-        "player_receptions",
-        "player_pass_tds",
-    ],
-    "mlb": [
-        "pitcher_strikeouts",
-        "pitcher_hits_allowed",
-    ],
-    "nhl": [
-        "player_shots_on_goal",
-        "player_goals",
-    ],
-}
-
-def _canonical_market_to_stat() -> dict[str, str]:
-    """Reverse map Odds API market key -> canonical stat label used by PROP_MAPPINGS."""
-    out: dict[str, str] = {}
-    for stat_label, market_key in PROP_MAPPINGS.items():
-        if isinstance(stat_label, str) and stat_label and stat_label[0].isupper():
-            out[market_key] = stat_label
-    return out
-
-MARKET_TO_STAT = _canonical_market_to_stat()
-
-def _safe_id(*parts: str) -> str:
-    raw = "|".join([p or "" for p in parts])
-    return hashlib.md5(raw.encode("utf-8")).hexdigest()
-
-async def fetch_dfs_props_from_odds_api(
-    session: aiohttp.ClientSession,
-    sport: str,
-    platform_key: str,
-) -> list[Prop]:
-    """Fetch DFS pick'em props from The Odds API using `regions=us_dfs`."""
-    if not get_odds_api_key():
-        return []
-
-    sport_l = sport.lower()
-    sport_key = ODDS_API_SPORTS.get(sport_l)
-    if not sport_key:
-        return []
-
-    bookmaker_key = DFS_BOOKMAKER_KEYS.get(platform_key.lower())
-    if not bookmaker_key:
-        return []
-
-    markets = DFS_MARKETS_BY_SPORT.get(sport_l, [])
-    if not markets:
-        return []
-
-    events_url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/events"
-    try:
-        async with session.get(
-            events_url,
-            params={"apiKey": get_odds_api_key(), "dateFormat": "iso"},
-            timeout=15,
-        ) as resp:
-            if resp.status != 200:
-                return []
-            events = await resp.json()
-    except Exception as e:
-        print(f"Odds API events error ({platform_key}): {e}")
-        return []
-
-    sem = asyncio.Semaphore(6)
-
-    async def _fetch_event_odds(event: dict) -> dict | None:
-        event_id = event.get("id")
-        if not event_id:
-            return None
-
-        url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/events/{event_id}/odds"
-        params = {
-            "apiKey": get_odds_api_key(),
-            "regions": "us_dfs",
-            "markets": ",".join(markets),
-            "bookmakers": bookmaker_key,
-            "oddsFormat": "american",
-            "dateFormat": "iso",
-        }
-        try:
-            async with sem:
-                async with session.get(url, params=params, timeout=20) as resp:
-                    if resp.status != 200:
-                        return None
-                    return await resp.json()
-        except Exception:
-            return None
-
-    odds_payloads = await asyncio.gather(*[_fetch_event_odds(e) for e in events[:40]])
-    odds_payloads = [p for p in odds_payloads if p]
-
-    props: list[Prop] = []
-    platform_norm = platform_key.lower()
-    sport_norm = sport_l.upper()
-
-    for payload in odds_payloads:
-        commence_time = payload.get("commence_time") or payload.get("commenceTime")
-        event_id = payload.get("id") or ""
-        home = payload.get("home_team") or ""
-        away = payload.get("away_team") or ""
-        opponent_label = f"{away} @ {home}" if home and away else None
-
-        for bookmaker in payload.get("bookmakers", []) or []:
-            for mkt in bookmaker.get("markets", []) or []:
-                market_key = mkt.get("key") or ""
-                stat_type = MARKET_TO_STAT.get(market_key, market_key)
-
-                seen = set()
-                for outcome in mkt.get("outcomes", []) or []:
-                    player = outcome.get("description") or outcome.get("participant") or ""
-                    point = outcome.get("point")
-                    if not player or point is None:
-                        continue
-
-                    tup = (player, market_key, float(point), str(event_id))
-                    if tup in seen:
-                        continue
-                    seen.add(tup)
-
-                    prop_id = _safe_id(platform_norm, sport_norm, market_key, player, str(point), str(event_id))
-                    props.append(Prop(
-                        id=prop_id,
-                        player_name=player,
-                        team="",
-                        opponent=opponent_label,
-                        sport=sport_norm,
-                        stat_type=stat_type,
-                        platform=platform_norm,
-                        line=float(point),
-                        game_time=commence_time,
-                    ))
-
-    return props
-
-async def fetch_prizepicks(session: aiohttp.ClientSession, sport: str) -> list[Prop]:
-    """Fetch PrizePicks props. Prefer The Odds API; fall back to direct if Odds API isn't available."""
-    props = await fetch_dfs_props_from_odds_api(session, sport, "prizepicks")
-    if props:
-        return props
-    return await fetch_prizepicks_direct(session, sport)
 
 
 async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Prop]:
@@ -572,10 +328,57 @@ async def fetch_sleeper_picks(session: aiohttp.ClientSession, sport: str) -> lis
     return []
 
 
-
 async def fetch_betr_picks(session: aiohttp.ClientSession, sport: str) -> list[Prop]:
-    """Fetch Betr Picks props via The Odds API `us_dfs`."""
-    return await fetch_dfs_props_from_odds_api(session, sport, "betr")
+    """
+    Fetch props from Betr Picks.
+    
+    RESEARCH NOTES:
+    - Betr Picks URL: picks.betr.app/picks/fantasy-pick-slip
+    - API endpoint likely at: api.betr.app or similar
+    
+    TO FIND THE API:
+    1. Open picks.betr.app in Chrome
+    2. Open DevTools (F12) → Network tab
+    3. Filter by "XHR" or "Fetch"
+    4. Browse the props and watch for API calls
+    5. Look for endpoints returning JSON with player props
+    
+    Expected endpoints might be:
+    - https://api.betr.app/v1/picks
+    - https://api.betr.app/v1/props
+    - https://picks.betr.app/api/lines
+    """
+    # Attempt to fetch from likely Betr API endpoints
+    possible_urls = [
+        "https://api.betr.app/v1/over-under-lines",
+        "https://api.betr.app/v1/picks/lines",
+        "https://picks.betr.app/api/v1/lines",
+    ]
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json",
+        "Origin": "https://picks.betr.app",
+        "Referer": "https://picks.betr.app/",
+    }
+    
+    for url in possible_urls:
+        try:
+            async with session.get(url, headers=headers, timeout=5) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    # If we get data, parse it
+                    # Structure will need to be discovered
+                    print(f"Betr API found at: {url}")
+                    print(f"Response keys: {data.keys() if isinstance(data, dict) else 'list'}")
+                    # TODO: Parse actual response once structure is known
+                    return []
+        except Exception as e:
+            continue
+    
+    # API not found yet - needs manual research
+    return []
+
 
 async def fetch_chalkboard(session: aiohttp.ClientSession, sport: str) -> list[Prop]:
     """
@@ -598,7 +401,7 @@ SHARP_BOOKS = ["draftkings", "fanduel", "betmgm", "caesars", "pointsbet"]
 
 async def fetch_sharp_odds(session: aiohttp.ClientSession, sport: str, market: str) -> list[dict]:
     """Fetch odds from The Odds API for a specific market, prioritizing sharp books."""
-    if not get_odds_api_key():
+    if not ODDS_API_KEY:
         return []
     
     sport_key = ODDS_API_SPORTS.get(sport.lower())
@@ -608,7 +411,7 @@ async def fetch_sharp_odds(session: aiohttp.ClientSession, sport: str, market: s
     try:
         # Get events
         events_url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/events"
-        async with session.get(events_url, params={"apiKey": get_odds_api_key()}) as resp:
+        async with session.get(events_url, params={"apiKey": ODDS_API_KEY}) as resp:
             if resp.status != 200:
                 return []
             events = await resp.json()
@@ -619,7 +422,7 @@ async def fetch_sharp_odds(session: aiohttp.ClientSession, sport: str, market: s
         for event in events[:8]:
             odds_url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/events/{event['id']}/odds"
             params = {
-                "apiKey": get_odds_api_key(),
+                "apiKey": ODDS_API_KEY,
                 "regions": "us",
                 "markets": market,
                 "oddsFormat": "american",
@@ -747,8 +550,7 @@ async def health():
     """Check API health and platform connectivity."""
     return {
         "status": "ok",
-        "odds_api_configured": bool(get_odds_api_key()),
-        "api_keys_loaded": api_key_manager.get_status()["total_keys"],
+        "odds_api_configured": bool(ODDS_API_KEY),
         "sharp_books": SHARP_BOOKS[:2],  # DraftKings, FanDuel
         "platforms": {
             "prizepicks": True,      # Working
@@ -762,42 +564,26 @@ async def health():
 @app.get("/api/odds-usage")
 async def get_odds_api_usage():
     """Check The Odds API usage/remaining requests."""
-    if not get_odds_api_key():
+    if not ODDS_API_KEY:
         return {"error": "ODDS_API_KEY not configured", "configured": False}
     
     # Make a lightweight request to check usage (sports list is free and returns headers)
     async with aiohttp.ClientSession() as session:
         try:
             url = "https://api.the-odds-api.com/v4/sports"
-            async with session.get(url, params={"apiKey": get_odds_api_key()}) as resp:
+            async with session.get(url, params={"apiKey": ODDS_API_KEY}) as resp:
                 if resp.status == 401:
-                    # Try rotating to next key
-                    if api_key_manager.rotate_key():
-                        return {"error": "Invalid API key, rotated to next key. Refresh to check.", "configured": True}
                     return {"error": "Invalid API key", "configured": True}
                 
                 # Extract usage from headers
                 requests_remaining = resp.headers.get("x-requests-remaining", "unknown")
                 requests_used = resp.headers.get("x-requests-used", "unknown")
                 
-                remaining = int(requests_remaining) if str(requests_remaining).isdigit() else 0
-                used = int(requests_used) if str(requests_used).isdigit() else 0
-                
-                # Update the key manager with usage info (triggers auto-rotation if low)
-                api_key_manager.update_usage(remaining, used)
-                
-                key_status = api_key_manager.get_status()
-                
                 return {
                     "configured": True,
-                    "requests_used": used,
-                    "requests_remaining": remaining,
-                    "requests_total": 500,  # Free tier limit per key
-                    "auto_rotation": {
-                        "enabled": key_status["total_keys"] > 1,
-                        "total_keys": key_status["total_keys"],
-                        "current_key": key_status["current_key_index"],
-                    }
+                    "requests_used": int(requests_used) if requests_used.isdigit() else requests_used,
+                    "requests_remaining": int(requests_remaining) if requests_remaining.isdigit() else requests_remaining,
+                    "requests_total": 500,  # Free tier limit
                 }
         except Exception as e:
             return {"error": str(e), "configured": True}
