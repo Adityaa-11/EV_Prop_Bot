@@ -1222,8 +1222,25 @@ async def get_ev_plays(
 async def get_middles(
     sport: str = Query("nba", description="Sport to analyze (nba, nfl, mlb, nhl, all)"),
     min_spread: float = Query(0.5, description="Minimum spread between lines"),
+    refresh: bool = Query(False, description="Force refresh (bypass cache)"),
 ):
     """Find middle/arbitrage opportunities across platforms."""
+    cache_key = f"middles_{sport.lower()}"
+    
+    # Check cache first (unless refresh requested)
+    if not refresh:
+        cached_data, is_fresh = cache.get(cache_key)
+        if cached_data is not None:
+            # Apply min_spread filter to cached data
+            middles = [m for m in cached_data if m["spread"] >= min_spread]
+            return {
+                "count": len(middles),
+                "sport": "ALL" if sport.lower() == "all" else sport.upper(),
+                "middles": middles,
+                "cached": True,
+                "cache_fresh": is_fresh,
+            }
+    
     async with aiohttp.ClientSession() as session:
         # Determine which sports to fetch
         sports_to_fetch = MAIN_SPORTS if sport.lower() == "all" else [sport.lower()]
@@ -1290,10 +1307,17 @@ async def get_middles(
         
         middles.sort(key=lambda x: x["spread"], reverse=True)
         
+        # Cache the unfiltered results (with min_spread=0)
+        cache.set(cache_key, middles)
+        
+        # Apply min_spread filter for response
+        filtered_middles = [m for m in middles if m["spread"] >= min_spread]
+        
         return {
-            "count": len(middles),
-            "sport": sport.upper(),
-            "middles": middles
+            "count": len(filtered_middles),
+            "sport": "ALL" if sport.lower() == "all" else sport.upper(),
+            "middles": filtered_middles,
+            "cached": False,
         }
 
 
@@ -1335,8 +1359,19 @@ async def compare_player(
 @app.get("/api/games")
 async def get_games(
     sport: Optional[str] = Query(None, description="Sport (nba, nfl, mlb, nhl) or omit for all"),
+    refresh: bool = Query(False, description="Force refresh (bypass cache)"),
 ):
     """Get today's games with prop counts (simplified for now)."""
+    cache_key = f"games_{sport.lower() if sport else 'all'}"
+    
+    # Check cache first (unless refresh requested)
+    if not refresh:
+        cached_data, is_fresh = cache.get(cache_key)
+        if cached_data is not None:
+            cached_data["cached"] = True
+            cached_data["cache_fresh"] = is_fresh
+            return cached_data
+    
     async with aiohttp.ClientSession() as session:
         # If no sport specified or "all", fetch from all sports
         if not sport or sport.lower() == "all":
@@ -1358,15 +1393,21 @@ async def get_games(
                 if p.team:
                     teams.add(f"{p.team} ({s.upper()})" if len(sports_to_fetch) > 1 else p.team)
         
-        return {
+        result = {
             "sport": "ALL" if len(sports_to_fetch) > 1 else sports_to_fetch[0].upper(),
             "teams_with_props": sorted(list(teams)),
             "total_props": len(all_pp_props) + len(all_ud_props),
             "platforms": {
                 "prizepicks": len(all_pp_props),
                 "underdog": len(all_ud_props),
-            }
+            },
+            "cached": False,
         }
+        
+        # Cache the result
+        cache.set(cache_key, result)
+        
+        return result
 
 
 @app.post("/api/calc")

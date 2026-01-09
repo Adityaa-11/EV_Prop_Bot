@@ -1,18 +1,19 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useRef } from "react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { RefreshCw, Loader2, AlertCircle, Calendar } from "lucide-react"
+import { RefreshCw, Loader2, AlertCircle, Calendar, Database } from "lucide-react"
 import { getGames, type GamesResponse } from "@/lib/api"
 
 export default function GamesPage() {
-  const [data, setData] = useState<GamesResponse | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [data, setData] = useState<(GamesResponse & { cached?: boolean; cache_fresh?: boolean }) | null>(null)
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [sport, setSport] = useState("all")
+  const initialFetch = useRef(false)
 
   const currentDate = new Date().toLocaleDateString("en-US", {
     weekday: "long",
@@ -21,12 +22,12 @@ export default function GamesPage() {
     day: "numeric",
   })
 
-  const fetchData = async () => {
+  const fetchData = async (forceRefresh = false) => {
     setLoading(true)
     setError(null)
     try {
-      const result = await getGames(sport)
-      setData(result)
+      const result = await getGames(sport, forceRefresh)
+      setData(result as GamesResponse & { cached?: boolean; cache_fresh?: boolean })
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch data")
     } finally {
@@ -35,7 +36,16 @@ export default function GamesPage() {
   }
 
   useEffect(() => {
-    fetchData()
+    if (!initialFetch.current) {
+      initialFetch.current = true
+      fetchData(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (initialFetch.current) {
+      fetchData(false)
+    }
   }, [sport])
 
   return (
@@ -46,10 +56,18 @@ export default function GamesPage() {
           <h1 className="text-3xl font-bold">Today&apos;s Games</h1>
           <p className="mt-1 text-sm text-muted-foreground">{currentDate}</p>
         </div>
-        <Button onClick={fetchData} disabled={loading} variant="outline" size="sm">
-          {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          {data?.cached && (
+            <Badge variant="secondary" className="gap-1 text-xs">
+              <Database className="h-3 w-3" />
+              {data.cache_fresh ? "Cached" : "Stale"}
+            </Badge>
+          )}
+          <Button onClick={() => fetchData(true)} disabled={loading} variant="outline" size="sm">
+            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* Filters */}

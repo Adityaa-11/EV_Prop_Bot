@@ -1,25 +1,26 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useRef } from "react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { RefreshCw, Loader2, AlertCircle, ArrowUp, ArrowDown, GitCompare } from "lucide-react"
+import { RefreshCw, Loader2, AlertCircle, ArrowUp, ArrowDown, GitCompare, Database } from "lucide-react"
 import { getMiddles, type MiddlesResponse, type Middle } from "@/lib/api"
 
 export default function MiddlesPage() {
-  const [data, setData] = useState<MiddlesResponse | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [data, setData] = useState<(MiddlesResponse & { cached?: boolean; cache_fresh?: boolean }) | null>(null)
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [sport, setSport] = useState("all")
+  const initialFetch = useRef(false)
 
-  const fetchData = async () => {
+  const fetchData = async (forceRefresh = false) => {
     setLoading(true)
     setError(null)
     try {
-      const result = await getMiddles({ sport })
-      setData(result)
+      const result = await getMiddles({ sport, refresh: forceRefresh })
+      setData(result as MiddlesResponse & { cached?: boolean; cache_fresh?: boolean })
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch data")
     } finally {
@@ -28,7 +29,16 @@ export default function MiddlesPage() {
   }
 
   useEffect(() => {
-    fetchData()
+    if (!initialFetch.current) {
+      initialFetch.current = true
+      fetchData(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (initialFetch.current) {
+      fetchData(false)
+    }
   }, [sport])
 
   return (
@@ -41,10 +51,18 @@ export default function MiddlesPage() {
             {loading ? "Loading..." : `${data?.count || 0} opportunities`}
           </p>
         </div>
-        <Button onClick={fetchData} disabled={loading} variant="outline" size="sm">
-          {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          {data?.cached && (
+            <Badge variant="secondary" className="gap-1 text-xs">
+              <Database className="h-3 w-3" />
+              {data.cache_fresh ? "Cached" : "Stale"}
+            </Badge>
+          )}
+          <Button onClick={() => fetchData(true)} disabled={loading} variant="outline" size="sm">
+            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* Filters */}

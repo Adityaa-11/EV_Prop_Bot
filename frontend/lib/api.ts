@@ -224,10 +224,12 @@ export async function getEVPlays(params: {
 export async function getMiddles(params: {
   sport?: string
   minSpread?: number
+  refresh?: boolean
 }): Promise<MiddlesResponse> {
   const searchParams = new URLSearchParams()
   if (params.sport) searchParams.set("sport", params.sport)
   if (params.minSpread !== undefined) searchParams.set("min_spread", params.minSpread.toString())
+  if (params.refresh) searchParams.set("refresh", "true")
   
   const query = searchParams.toString()
   return fetchApi<MiddlesResponse>(`/api/middles${query ? `?${query}` : ""}`)
@@ -239,9 +241,12 @@ export async function comparePlayer(playerName: string, sport: string = "nba") {
 }
 
 // Get games summary
-export async function getGames(sport: string = "all"): Promise<GamesResponse> {
-  const params = sport && sport !== "all" ? `?sport=${sport}` : ""
-  return fetchApi<GamesResponse>(`/api/games${params}`)
+export async function getGames(sport: string = "all", refresh: boolean = false): Promise<GamesResponse> {
+  const searchParams = new URLSearchParams()
+  if (sport && sport !== "all") searchParams.set("sport", sport)
+  if (refresh) searchParams.set("refresh", "true")
+  const query = searchParams.toString()
+  return fetchApi<GamesResponse>(`/api/games${query ? `?${query}` : ""}`)
 }
 
 // Calculate no-vig odds
