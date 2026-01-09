@@ -609,9 +609,21 @@ async def fetch_sharp_odds(session: aiohttp.ClientSession, sport: str, market: s
         # Get events
         events_url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/events"
         async with session.get(events_url, params={"apiKey": get_odds_api_key()}) as resp:
-            if resp.status != 200:
+            # Handle quota exceeded - rotate key and retry
+            if resp.status == 403 or resp.status == 401:
+                print(f"[API Keys] Quota exceeded or invalid key, rotating...")
+                if api_key_manager.rotate_key():
+                    # Retry with new key
+                    async with session.get(events_url, params={"apiKey": get_odds_api_key()}) as retry_resp:
+                        if retry_resp.status != 200:
+                            return []
+                        events = await retry_resp.json()
+                else:
+                    return []
+            elif resp.status != 200:
                 return []
-            events = await resp.json()
+            else:
+                events = await resp.json()
         
         all_odds = []
         
@@ -756,6 +768,22 @@ async def health():
             "chalkboard": False,     # Add your implementation
             "betr": False,           # Needs API research
         }
+    }
+
+
+@app.post("/api/rotate-key")
+async def force_rotate_key():
+    """Force rotation to the next API key."""
+    old_index = api_key_manager.current_index
+    success = api_key_manager.rotate_key()
+    new_index = api_key_manager.current_index
+    
+    return {
+        "success": success,
+        "previous_key": old_index + 1,
+        "current_key": new_index + 1,
+        "total_keys": len(api_key_manager.keys),
+        "message": f"Rotated from key {old_index + 1} to key {new_index + 1}" if success else "No backup keys available"
     }
 
 
