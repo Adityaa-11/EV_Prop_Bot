@@ -105,13 +105,15 @@ class OddsAPIKeyManager:
         # Supports: ODDS_API_KEY, ODDS_API_KEY_1, ODDS_API_KEY_2, etc.
         primary_key = os.getenv("ODDS_API_KEY")
         if primary_key:
-            self.keys.append(primary_key)
+            self.keys.append(primary_key.strip())
         
         # Load numbered backup keys
         for i in range(1, 10):  # Support up to 9 backup keys
             key = os.getenv(f"ODDS_API_KEY_{i}")
-            if key and key not in self.keys:
-                self.keys.append(key)
+            if key:
+                key = key.strip()  # Remove any whitespace/newlines
+                if key not in self.keys:
+                    self.keys.append(key)
         
         print(f"[API Keys] Loaded {len(self.keys)} Odds API key(s)")
     
@@ -158,6 +160,25 @@ class OddsAPIKeyManager:
             "current_key_preview": f"{self.current_key[:8]}..." if self.current_key else None,
             "usage": self.key_usage,
         }
+    
+    def reload_keys(self):
+        """Reload keys from environment (useful after adding new keys)."""
+        self.keys = []
+        self.current_index = 0
+        
+        primary_key = os.getenv("ODDS_API_KEY")
+        if primary_key:
+            self.keys.append(primary_key.strip())
+        
+        for i in range(1, 10):
+            key = os.getenv(f"ODDS_API_KEY_{i}")
+            if key:
+                key = key.strip()  # Remove whitespace
+                if key not in self.keys:
+                    self.keys.append(key)
+        
+        print(f"[API Keys] Reloaded {len(self.keys)} Odds API key(s)")
+        return len(self.keys)
 
 # Initialize the key manager
 api_key_manager = OddsAPIKeyManager()
@@ -822,6 +843,17 @@ async def clear_cache():
     """Clear all cached data."""
     cache.invalidate()
     return {"success": True, "message": "Cache cleared"}
+
+
+@app.post("/api/reload-keys")
+async def reload_api_keys():
+    """Reload API keys from environment variables."""
+    count = api_key_manager.reload_keys()
+    return {
+        "success": True,
+        "keys_loaded": count,
+        "message": f"Reloaded {count} API key(s) from environment"
+    }
 
 
 @app.get("/api/health")
