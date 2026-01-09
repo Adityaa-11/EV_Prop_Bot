@@ -22,9 +22,66 @@ from datetime import datetime, timedelta
 from fuzzywuzzy import fuzz
 import os
 import hashlib
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# =============================================================================
+# CACHING SYSTEM - Saves API quota by caching data
+# =============================================================================
+
+class DataCache:
+    """Simple in-memory cache with TTL (time-to-live)."""
+    
+    def __init__(self, default_ttl: int = 300):  # 5 minutes default
+        self.cache = {}
+        self.default_ttl = default_ttl
+    
+    def get(self, key: str) -> tuple[any, bool]:
+        """Get cached data. Returns (data, is_fresh) or (None, False) if expired/missing."""
+        if key not in self.cache:
+            return None, False
+        
+        data, timestamp, ttl = self.cache[key]
+        age = time.time() - timestamp
+        
+        if age > ttl:
+            # Expired but return stale data with is_fresh=False
+            return data, False
+        
+        return data, True
+    
+    def set(self, key: str, data: any, ttl: int = None):
+        """Cache data with optional custom TTL."""
+        self.cache[key] = (data, time.time(), ttl or self.default_ttl)
+    
+    def invalidate(self, key: str = None):
+        """Clear specific key or all cache."""
+        if key:
+            self.cache.pop(key, None)
+        else:
+            self.cache.clear()
+    
+    def get_stats(self) -> dict:
+        """Get cache statistics."""
+        now = time.time()
+        stats = {
+            "total_keys": len(self.cache),
+            "keys": {}
+        }
+        for key, (data, timestamp, ttl) in self.cache.items():
+            age = now - timestamp
+            stats["keys"][key] = {
+                "age_seconds": round(age, 1),
+                "ttl_seconds": ttl,
+                "is_fresh": age <= ttl,
+                "expires_in": max(0, round(ttl - age, 1)),
+            }
+        return stats
+
+# Initialize cache (5 minute default TTL)
+cache = DataCache(default_ttl=300)
 
 # =============================================================================
 # CONFIGURATION
@@ -754,6 +811,19 @@ async def root():
     return {"message": "EV Dashboard API", "version": "1.0.0"}
 
 
+@app.get("/api/cache")
+async def get_cache_status():
+    """Get cache statistics."""
+    return cache.get_stats()
+
+
+@app.post("/api/cache/clear")
+async def clear_cache():
+    """Clear all cached data."""
+    cache.invalidate()
+    return {"success": True, "message": "Cache cleared"}
+
+
 @app.get("/api/health")
 async def health():
     """Check API health and platform connectivity."""
@@ -898,8 +968,33 @@ async def get_props(
     stat: Optional[str] = Query(None, description="Filter by stat type"),
     min_ev: Optional[float] = Query(None, description="Minimum EV percentage"),
     player: Optional[str] = Query(None, description="Search by player name"),
+    refresh: bool = Query(False, description="Force refresh (bypass cache)"),
 ):
     """Get all props across platforms with optional filters."""
+    cache_key = f"props_{sport.lower()}"
+    
+    # Check cache first (unless refresh requested)
+    if not refresh:
+        cached_data, is_fresh = cache.get(cache_key)
+        if cached_data is not None:
+            all_props = cached_data
+            # Apply filters to cached data
+            if platform:
+                all_props = [p for p in all_props if p.platform == platform.lower()]
+            if stat:
+                all_props = [p for p in all_props if stat.lower() in p.stat_type.lower()]
+            if player:
+                all_props = [p for p in all_props if fuzz.partial_ratio(player.lower(), p.player_name.lower()) >= 70]
+            
+            return {
+                "count": len(all_props),
+                "sport": sport.upper(),
+                "cached": True,
+                "cache_fresh": is_fresh,
+                "props": [p.dict() for p in all_props]
+            }
+    
+    # Fetch fresh data
     async with aiohttp.ClientSession() as session:
         # Determine which sports to fetch
         sports_to_fetch = MAIN_SPORTS if sport.lower() == "all" else [sport.lower()]
@@ -919,6 +1014,9 @@ async def get_props(
         all_props = []
         for props in results:
             all_props.extend(props)
+        
+        # Cache the unfiltered data
+        cache.set(cache_key, all_props)
         
         # Apply filters
         if platform:
@@ -943,8 +1041,33 @@ async def get_ev_plays(
     platform: Optional[str] = Query(None, description="Filter by platform"),
     min_ev: float = Query(0, description="Minimum EV percentage"),
     min_win: float = Query(54, description="Minimum win probability"),
+    refresh: bool = Query(False, description="Force refresh (bypass cache)"),
 ):
     """Get +EV plays with sharp odds analysis. Prioritizes DraftKings/FanDuel lines."""
+    cache_key = f"ev_{sport.lower()}"
+    
+    # Check cache first (unless refresh requested)
+    if not refresh:
+        cached_data, is_fresh = cache.get(cache_key)
+        if cached_data is not None:
+            # Apply filters to cached data
+            ev_plays = cached_data
+            if platform:
+                ev_plays = [p for p in ev_plays if p["prop"]["platform"] == platform.lower()]
+            if min_ev > 0:
+                ev_plays = [p for p in ev_plays if p["ev_percentage"] >= min_ev]
+            if min_win > 54:
+                ev_plays = [p for p in ev_plays if p["win_probability"] >= min_win]
+            
+            return {
+                "count": len(ev_plays),
+                "sport": "ALL" if sport.lower() == "all" else sport.upper(),
+                "sharp_books_used": list(set(p["sharp_odds"]["bookmaker"] for p in ev_plays)) if ev_plays else [],
+                "plays": ev_plays,
+                "cached": True,
+                "cache_fresh": is_fresh,
+            }
+    
     async with aiohttp.ClientSession() as session:
         # Determine which sports to fetch
         sports_to_fetch = MAIN_SPORTS if sport.lower() == "all" else [sport.lower()]
@@ -1042,11 +1165,24 @@ async def get_ev_plays(
         # Sort by EV
         ev_plays.sort(key=lambda x: x["ev_percentage"], reverse=True)
         
+        # Cache the unfiltered results
+        cache.set(cache_key, ev_plays)
+        
+        # Apply filters for response
+        filtered_plays = ev_plays
+        if platform:
+            filtered_plays = [p for p in filtered_plays if p["prop"]["platform"] == platform.lower()]
+        if min_ev > 0:
+            filtered_plays = [p for p in filtered_plays if p["ev_percentage"] >= min_ev]
+        if min_win > 54:
+            filtered_plays = [p for p in filtered_plays if p["win_probability"] >= min_win]
+        
         return {
-            "count": len(ev_plays),
+            "count": len(filtered_plays),
             "sport": "ALL" if sport.lower() == "all" else sport.upper(),
-            "sharp_books_used": list(set(p["sharp_odds"]["bookmaker"] for p in ev_plays)),
-            "plays": ev_plays
+            "sharp_books_used": list(set(p["sharp_odds"]["bookmaker"] for p in filtered_plays)) if filtered_plays else [],
+            "plays": filtered_plays,
+            "cached": False,
         }
 
 

@@ -1,26 +1,27 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useRef } from "react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { ArrowUp, ArrowDown, RefreshCw, Loader2, AlertCircle } from "lucide-react"
+import { ArrowUp, ArrowDown, RefreshCw, Loader2, AlertCircle, Database } from "lucide-react"
 import { getEVPlays, type EVPlay, type EVResponse } from "@/lib/api"
 
 export default function EVPlaysPage() {
-  const [data, setData] = useState<EVResponse | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [data, setData] = useState<(EVResponse & { cached?: boolean; cache_fresh?: boolean }) | null>(null)
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [sport, setSport] = useState("all")
   const [platform, setPlatform] = useState<string | undefined>(undefined)
+  const initialFetch = useRef(false)
 
-  const fetchData = async () => {
+  const fetchData = async (forceRefresh = false) => {
     setLoading(true)
     setError(null)
     try {
-      const result = await getEVPlays({ sport, platform })
-      setData(result)
+      const result = await getEVPlays({ sport, platform, refresh: forceRefresh })
+      setData(result as EVResponse & { cached?: boolean; cache_fresh?: boolean })
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch data")
     } finally {
@@ -28,8 +29,19 @@ export default function EVPlaysPage() {
     }
   }
 
+  // Only fetch from cache on initial load (no API cost)
   useEffect(() => {
-    fetchData()
+    if (!initialFetch.current) {
+      initialFetch.current = true
+      fetchData(false) // Load from cache
+    }
+  }, [])
+
+  // When filters change, fetch from cache (not fresh)
+  useEffect(() => {
+    if (initialFetch.current) {
+      fetchData(false)
+    }
   }, [sport, platform])
 
   const formatOdds = (odds: number) => (odds > 0 ? `+${odds}` : odds.toString())
@@ -44,10 +56,18 @@ export default function EVPlaysPage() {
             {loading ? "Loading..." : `${data?.count || 0} plays found`}
           </p>
         </div>
-        <Button onClick={fetchData} disabled={loading} variant="outline" size="sm">
-          {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          {data?.cached && (
+            <Badge variant="secondary" className="gap-1 text-xs">
+              <Database className="h-3 w-3" />
+              {data.cache_fresh ? "Cached" : "Stale"}
+            </Badge>
+          )}
+          <Button onClick={() => fetchData(true)} disabled={loading} variant="outline" size="sm">
+            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* Filters */}

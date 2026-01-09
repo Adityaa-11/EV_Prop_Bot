@@ -1,33 +1,35 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useRef } from "react"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { RefreshCw, Loader2, AlertCircle, Search } from "lucide-react"
+import { RefreshCw, Loader2, AlertCircle, Search, Database } from "lucide-react"
 import { getProps, type PropsResponse, type ApiProp } from "@/lib/api"
 
 export default function PropsPage() {
-  const [data, setData] = useState<PropsResponse | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [data, setData] = useState<(PropsResponse & { cached?: boolean; cache_fresh?: boolean }) | null>(null)
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [sport, setSport] = useState("all")
   const [platform, setPlatform] = useState<string | undefined>(undefined)
   const [search, setSearch] = useState("")
+  const initialFetch = useRef(false)
 
-  const fetchData = async () => {
+  const fetchData = async (forceRefresh = false) => {
     setLoading(true)
     setError(null)
     try {
       const result = await getProps({ 
         sport, 
         platform,
-        player: search || undefined 
+        player: search || undefined,
+        refresh: forceRefresh 
       })
-      setData(result)
+      setData(result as PropsResponse & { cached?: boolean; cache_fresh?: boolean })
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch data")
     } finally {
@@ -36,11 +38,20 @@ export default function PropsPage() {
   }
 
   useEffect(() => {
-    fetchData()
+    if (!initialFetch.current) {
+      initialFetch.current = true
+      fetchData(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (initialFetch.current) {
+      fetchData(false)
+    }
   }, [sport, platform])
 
   const handleSearch = () => {
-    fetchData()
+    fetchData(false)
   }
 
   // Filter props locally for instant search
@@ -58,10 +69,18 @@ export default function PropsPage() {
             {loading ? "Loading..." : `${filteredProps.length} props available`}
           </p>
         </div>
-        <Button onClick={fetchData} disabled={loading} variant="outline" size="sm">
-          {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          {data?.cached && (
+            <Badge variant="secondary" className="gap-1 text-xs">
+              <Database className="h-3 w-3" />
+              {data.cache_fresh ? "Cached" : "Stale"}
+            </Badge>
+          )}
+          <Button onClick={() => fetchData(true)} disabled={loading} variant="outline" size="sm">
+            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* Filters */}

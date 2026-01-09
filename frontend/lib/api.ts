@@ -188,12 +188,14 @@ export async function getProps(params: {
   platform?: string
   stat?: string
   player?: string
+  refresh?: boolean
 }): Promise<PropsResponse> {
   const searchParams = new URLSearchParams()
   if (params.sport) searchParams.set("sport", params.sport)
   if (params.platform) searchParams.set("platform", params.platform)
   if (params.stat) searchParams.set("stat", params.stat)
   if (params.player) searchParams.set("player", params.player)
+  if (params.refresh) searchParams.set("refresh", "true")
   
   const query = searchParams.toString()
   return fetchApi<PropsResponse>(`/api/props${query ? `?${query}` : ""}`)
@@ -205,12 +207,14 @@ export async function getEVPlays(params: {
   platform?: string
   minEv?: number
   minWin?: number
+  refresh?: boolean
 }): Promise<EVResponse> {
   const searchParams = new URLSearchParams()
   if (params.sport) searchParams.set("sport", params.sport)
   if (params.platform) searchParams.set("platform", params.platform)
   if (params.minEv !== undefined) searchParams.set("min_ev", params.minEv.toString())
   if (params.minWin !== undefined) searchParams.set("min_win", params.minWin.toString())
+  if (params.refresh) searchParams.set("refresh", "true")
   
   const query = searchParams.toString()
   return fetchApi<EVResponse>(`/api/ev${query ? `?${query}` : ""}`)
