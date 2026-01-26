@@ -351,6 +351,7 @@ async def fetch_prizepicks_direct(session: aiohttp.ClientSession, sport: str) ->
     """Fetch props from PrizePicks API."""
     league_id = PP_LEAGUE_IDS.get(sport.lower())
     if not league_id:
+        print(f"[PrizePicks Direct] Unknown sport: {sport}")
         return []
     
     url = f"https://api.prizepicks.com/projections?league_id={league_id}&per_page=250&single_stat=true"
@@ -371,7 +372,9 @@ async def fetch_prizepicks_direct(session: aiohttp.ClientSession, sport: str) ->
     
     try:
         async with session.get(url, headers=headers, timeout=10) as resp:
+            print(f"[PrizePicks Direct] API response status: {resp.status} for {sport.upper()}")
             if resp.status != 200:
+                print(f"[PrizePicks Direct] Failed - status {resp.status}")
                 return []
             
             data = await resp.json()
@@ -394,9 +397,12 @@ async def fetch_prizepicks_direct(session: aiohttp.ClientSession, sport: str) ->
                     game_time=attrs.get("start_time", ""),
                 ))
             
+            print(f"[PrizePicks Direct] Got {len(props)} props for {sport.upper()}")
             return props
     except Exception as e:
-        print(f"PrizePicks error: {e}")
+        print(f"[PrizePicks Direct] Error: {e}")
+        import traceback
+        traceback.print_exc()
         return []
 
 
@@ -560,28 +566,49 @@ async def fetch_dfs_props_from_odds_api(
     return props
 
 async def fetch_prizepicks(session: aiohttp.ClientSession, sport: str) -> list[Prop]:
-    """Fetch PrizePicks props. Prefer The Odds API; fall back to direct if Odds API isn't available."""
+    """Fetch PrizePicks props. Try direct API first (free), fall back to Odds API if needed."""
+    # Try direct PrizePicks API first (FREE - doesn't use Odds API quota)
+    props = await fetch_prizepicks_direct(session, sport)
+    if props:
+        print(f"[PrizePicks] Got {len(props)} props from direct API for {sport.upper()}")
+        return props
+    
+    # Fall back to Odds API if direct fails (uses quota)
+    print(f"[PrizePicks] Direct API failed for {sport.upper()}, trying Odds API...")
     props = await fetch_dfs_props_from_odds_api(session, sport, "prizepicks")
     if props:
-        return props
-    return await fetch_prizepicks_direct(session, sport)
+        print(f"[PrizePicks] Got {len(props)} props from Odds API for {sport.upper()}")
+    return props
 
 
 async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Prop]:
     """Fetch props from Underdog Fantasy API."""
     ud_sport = UD_SPORTS.get(sport.lower())
     if not ud_sport:
+        print(f"[Underdog] Unknown sport: {sport}")
         return []
     
     url = "https://api.underdogfantasy.com/beta/v6/over_under_lines"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Origin": "https://underdogfantasy.com",
+        "Referer": "https://underdogfantasy.com/",
+        "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"macOS"',
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-site",
     }
     
     try:
         async with session.get(url, headers=headers, timeout=15) as resp:
+            print(f"[Underdog] API response status: {resp.status}")
             if resp.status != 200:
+                print(f"[Underdog] Failed to fetch - status {resp.status}")
                 return []
             
             data = await resp.json()
@@ -590,6 +617,14 @@ async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Pro
             games = {g["id"]: g for g in data.get("games", [])}
             appearances = {a["id"]: a for a in data.get("appearances", [])}
             players = {p["id"]: p for p in data.get("players", [])}
+            
+            print(f"[Underdog] Found {len(games)} games, {len(appearances)} appearances, {len(players)} players")
+            
+            # Debug: print unique sport_ids to see what format they're in
+            sport_ids = set()
+            for g in games.values():
+                sport_ids.add(str(g.get("sport_id", "unknown")))
+            print(f"[Underdog] Available sport_ids: {sport_ids}")
             
             props = []
             for line in data.get("over_under_lines", []):
@@ -602,8 +637,9 @@ async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Pro
                 match_id = app.get("match_id")
                 game = games.get(match_id, {})
                 
-                # Filter by sport
-                if game.get("sport_id", "").upper() != ud_sport:
+                # Filter by sport - try multiple comparison methods
+                game_sport = str(game.get("sport_id", "")).upper()
+                if game_sport != ud_sport and game_sport != ud_sport.lower():
                     continue
                 
                 player_id = app.get("player_id")
@@ -625,9 +661,12 @@ async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Pro
                         game_time=game.get("scheduled_at", ""),
                     ))
             
+            print(f"[Underdog] Returning {len(props)} props for {sport.upper()}")
             return props
     except Exception as e:
-        print(f"Underdog error: {e}")
+        print(f"[Underdog] Error: {e}")
+        import traceback
+        traceback.print_exc()
         return []
 
 
