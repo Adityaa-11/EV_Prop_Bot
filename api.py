@@ -1104,6 +1104,95 @@ async def debug_sharp_odds(
             return {"error": str(e), "traceback": traceback.format_exc()}
 
 
+@app.get("/api/debug/ev-calc")
+async def debug_ev_calc(sport: str = Query("nba")):
+    """Debug endpoint to show EV calculations for all matched props."""
+    async with aiohttp.ClientSession() as session:
+        try:
+            # Get props
+            pp_props = await fetch_prizepicks(session, sport)
+            all_props = pp_props
+            
+            if not all_props:
+                return {"error": "No props found"}
+            
+            # Get first market
+            markets_needed = set()
+            for prop in all_props:
+                market = PROP_MAPPINGS.get(prop.stat_type)
+                if market:
+                    markets_needed.add(market)
+            
+            if not markets_needed:
+                return {"error": "No mappable markets"}
+            
+            # Get sharp odds for first 2 markets
+            all_odds = []
+            for market in list(markets_needed)[:2]:
+                odds = await fetch_sharp_odds(session, sport, market)
+                all_odds.extend(odds)
+            
+            if not all_odds:
+                return {"error": "No sharp odds found"}
+            
+            # Calculate EV for each matched prop
+            results = []
+            for prop in all_props[:50]:  # Limit to first 50
+                market = PROP_MAPPINGS.get(prop.stat_type)
+                if not market:
+                    continue
+                
+                relevant_odds = [o for o in all_odds if o["market"] == market]
+                matched_name = match_player(prop.player_name, [o["player"] for o in relevant_odds])
+                
+                if not matched_name:
+                    continue
+                
+                for odds in relevant_odds:
+                    if odds["player"] != matched_name:
+                        continue
+                    if abs(odds["line"] - prop.line) > 0.5:
+                        continue
+                    
+                    over_prob, under_prob = calculate_no_vig(odds["over_odds"], odds["under_odds"])
+                    win_prob = max(over_prob, under_prob)
+                    recommended = "OVER" if over_prob > under_prob else "UNDER"
+                    
+                    default_be = BREAKEVEN.get(prop.platform, {}).get("default", 54.34)
+                    ev_pct = win_prob - default_be
+                    
+                    results.append({
+                        "player": prop.player_name,
+                        "stat": prop.stat_type,
+                        "prop_line": prop.line,
+                        "book_line": odds["line"],
+                        "over_odds": odds["over_odds"],
+                        "under_odds": odds["under_odds"],
+                        "over_prob": round(over_prob, 2),
+                        "under_prob": round(under_prob, 2),
+                        "win_prob": round(win_prob, 2),
+                        "ev_pct": round(ev_pct, 2),
+                        "recommended": recommended,
+                        "would_pass_54": win_prob >= 54,
+                        "would_pass_52": win_prob >= 52,
+                    })
+                    break
+            
+            # Sort by EV descending
+            results.sort(key=lambda x: x["ev_pct"], reverse=True)
+            
+            return {
+                "total_props": len(all_props),
+                "total_calculated": len(results),
+                "passing_54": len([r for r in results if r["would_pass_54"]]),
+                "passing_52": len([r for r in results if r["would_pass_52"]]),
+                "best_plays": results[:15],
+            }
+        except Exception as e:
+            import traceback
+            return {"error": str(e), "traceback": traceback.format_exc()}
+
+
 @app.get("/api/debug/ev-matching")
 async def debug_ev_matching(sport: str = Query("nba")):
     """Debug endpoint to test EV matching logic."""
@@ -1564,6 +1653,10 @@ async def get_ev_plays(
             
             default_be = BREAKEVEN.get(prop.platform, {}).get("default", 54.34)
             ev_pct = win_prob - default_be
+            
+            # Debug: Log close calls (win_prob between 50-60%)
+            if 50 <= win_prob <= 60:
+                print(f"[EV Calc] {prop.player_name} {prop.stat_type}: win={win_prob:.1f}%, ev={ev_pct:.1f}%, odds={best_odds['over_odds']}/{best_odds['under_odds']}")
             
             if win_prob >= min_win and ev_pct >= min_ev:
                 ev_plays.append({
