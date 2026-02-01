@@ -147,10 +147,21 @@ class OddsAPIKeyManager:
                 "used": used,
             }
             
-            # Auto-rotate if running low (less than 10 requests)
-            if remaining < 10 and len(self.keys) > 1:
+            # Auto-rotate if depleted or running low (less than 5 requests)
+            if remaining <= 5 and len(self.keys) > 1:
                 print(f"[API Keys] Key {self.current_index + 1} running low ({remaining} remaining), rotating...")
                 self.rotate_key()
+    
+    def mark_key_exhausted(self):
+        """Mark current key as exhausted and rotate."""
+        if self.current_key:
+            self.key_usage[self.current_key[:8]] = {
+                "remaining": 0,
+                "used": 500,
+                "exhausted": True,
+            }
+            print(f"[API Keys] Key {self.current_index + 1} exhausted, rotating...")
+            self.rotate_key()
     
     def get_status(self) -> dict:
         """Get status of all keys."""
@@ -576,9 +587,27 @@ async def fetch_dfs_props_from_odds_api(
             params={"apiKey": get_odds_api_key(), "dateFormat": "iso"},
             timeout=15,
         ) as resp:
-            if resp.status != 200:
+            # Handle quota exceeded - rotate and retry
+            if resp.status == 403 or resp.status == 401 or resp.status == 429:
+                print(f"[DFS Props] Quota exceeded or invalid key (status {resp.status}), rotating...")
+                if api_key_manager.rotate_key():
+                    async with session.get(
+                        events_url,
+                        params={"apiKey": get_odds_api_key(), "dateFormat": "iso"},
+                        timeout=15,
+                    ) as retry_resp:
+                        if retry_resp.status != 200:
+                            print(f"[DFS Props] Retry failed with status {retry_resp.status}")
+                            return []
+                        events = await retry_resp.json()
+                else:
+                    print(f"[DFS Props] No more keys to rotate to")
+                    return []
+            elif resp.status != 200:
+                print(f"[DFS Props] Events fetch failed: {resp.status}")
                 return []
-            events = await resp.json()
+            else:
+                events = await resp.json()
     except Exception as e:
         print(f"Odds API events error ({platform_key}): {e}")
         return []
