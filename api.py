@@ -873,6 +873,10 @@ MARKET_PRIORITY = [
     "player_blocks_steals",
 ]
 
+# Reduce calls to keep EV endpoint responsive
+SHARP_EVENT_LIMIT = 6
+SHARP_MARKET_LIMIT = 6
+
 async def fetch_sharp_odds(session: aiohttp.ClientSession, sport: str, market: str) -> list[dict]:
     """Fetch odds from The Odds API for a specific market, prioritizing sharp books."""
     if not get_odds_api_key():
@@ -910,8 +914,9 @@ async def fetch_sharp_odds(session: aiohttp.ClientSession, sport: str, market: s
         
         all_odds = []
         
-        # Get odds for each event (increased limit for better coverage)
-        for event in events[:12]:  # Increased from 8 to 12 events
+        sem = asyncio.Semaphore(4)
+
+        async def _fetch_event(event: dict) -> list[dict]:
             odds_url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/events/{event['id']}/odds"
             params = {
                 "apiKey": get_odds_api_key(),
@@ -921,60 +926,67 @@ async def fetch_sharp_odds(session: aiohttp.ClientSession, sport: str, market: s
                 # Request sharp books - Pinnacle is sharpest, then US books
                 "bookmakers": "pinnacle,draftkings,fanduel,betmgm,bovada,betonlineag,caesars,betrivers,lowvig,mybookieag",
             }
-            
-            async with session.get(odds_url, params=params) as resp:
-                # Update usage from headers
-                remaining = resp.headers.get("x-requests-remaining", "0")
-                used = resp.headers.get("x-requests-used", "0")
-                if str(remaining).isdigit() and str(used).isdigit():
-                    api_key_manager.update_usage(int(remaining), int(used))
-                
-                if resp.status != 200:
-                    print(f"[Sharp Odds] Event {event['id']} returned status {resp.status}")
-                    continue
-                
-                data = await resp.json()
-                print(f"[Sharp Odds] Event {event['id']}: got {len(data.get('bookmakers', []))} bookmakers")
-                
-                # Sort bookmakers by our preference order (Pinnacle first = sharpest)
-                bookmakers = data.get("bookmakers", [])
-                bookmakers.sort(key=lambda b: SHARP_BOOKS.index(b["key"]) if b["key"] in SHARP_BOOKS else 999)
-                
-                for bookmaker in bookmakers:
-                    for mkt in bookmaker.get("markets", []):
-                        if mkt["key"] != market:
-                            continue
-                        
-                        # Group outcomes by player
-                        player_outcomes = {}
-                        for outcome in mkt.get("outcomes", []):
-                            player = outcome.get("description", "")
-                            if player not in player_outcomes:
-                                player_outcomes[player] = {}
-                            
-                            name = outcome.get("name", "").lower()
-                            if "over" in name:
-                                player_outcomes[player]["over"] = outcome
-                            elif "under" in name:
-                                player_outcomes[player]["under"] = outcome
-                        
-                        for player, outcomes in player_outcomes.items():
-                            if "over" in outcomes and "under" in outcomes:
-                                # Determine if this is a sharp book
-                                # Pinnacle is sharpest, then DK/FD
-                                is_sharp = bookmaker["key"] in ["pinnacle", "draftkings", "fanduel", "lowvig"]
-                                
-                                all_odds.append({
-                                    "player": player,
-                                    "line": outcomes["over"].get("point", 0),
-                                    "over_odds": outcomes["over"].get("price", -110),
-                                    "under_odds": outcomes["under"].get("price", -110),
-                                    "bookmaker": bookmaker["key"],
-                                    "market": market,
-                                    "is_sharp": is_sharp,
-                                })
-            
-            await asyncio.sleep(0.2)  # Slightly faster rate limiting
+
+            async with sem:
+                async with session.get(odds_url, params=params) as resp:
+                    # Update usage from headers
+                    remaining = resp.headers.get("x-requests-remaining", "0")
+                    used = resp.headers.get("x-requests-used", "0")
+                    if str(remaining).isdigit() and str(used).isdigit():
+                        api_key_manager.update_usage(int(remaining), int(used))
+
+                    if resp.status != 200:
+                        print(f"[Sharp Odds] Event {event['id']} returned status {resp.status}")
+                        return []
+
+                    data = await resp.json()
+                    print(f"[Sharp Odds] Event {event['id']}: got {len(data.get('bookmakers', []))} bookmakers")
+
+            # Sort bookmakers by our preference order (Pinnacle first = sharpest)
+            bookmakers = data.get("bookmakers", [])
+            bookmakers.sort(key=lambda b: SHARP_BOOKS.index(b["key"]) if b["key"] in SHARP_BOOKS else 999)
+
+            event_odds: list[dict] = []
+            for bookmaker in bookmakers:
+                for mkt in bookmaker.get("markets", []):
+                    if mkt["key"] != market:
+                        continue
+
+                    # Group outcomes by player
+                    player_outcomes = {}
+                    for outcome in mkt.get("outcomes", []):
+                        player = outcome.get("description", "")
+                        if player not in player_outcomes:
+                            player_outcomes[player] = {}
+
+                        name = outcome.get("name", "").lower()
+                        if "over" in name:
+                            player_outcomes[player]["over"] = outcome
+                        elif "under" in name:
+                            player_outcomes[player]["under"] = outcome
+
+                    for player, outcomes in player_outcomes.items():
+                        if "over" in outcomes and "under" in outcomes:
+                            # Determine if this is a sharp book
+                            # Pinnacle is sharpest, then DK/FD
+                            is_sharp = bookmaker["key"] in ["pinnacle", "draftkings", "fanduel", "lowvig"]
+
+                            event_odds.append({
+                                "player": player,
+                                "line": outcomes["over"].get("point", 0),
+                                "over_odds": outcomes["over"].get("price", -110),
+                                "under_odds": outcomes["under"].get("price", -110),
+                                "bookmaker": bookmaker["key"],
+                                "market": market,
+                                "is_sharp": is_sharp,
+                            })
+
+            return event_odds
+
+        events = events[:SHARP_EVENT_LIMIT]
+        results = await asyncio.gather(*[_fetch_event(e) for e in events])
+        for event_odds in results:
+            all_odds.extend(event_odds)
         
         print(f"[Sharp Odds] Found {len(all_odds)} odds entries for {market} in {sport}")
         return all_odds
@@ -1602,8 +1614,8 @@ async def get_ev_plays(
             # Order markets by priority first, then any remaining
             ordered_markets = [m for m in MARKET_PRIORITY if m in sport_markets]
             ordered_markets.extend([m for m in sport_markets if m not in ordered_markets])
-            # Limit API calls per sport to reduce cost, but fetch more than 3
-            for market in ordered_markets[:8]:
+            # Limit API calls per sport to reduce cost and latency
+            for market in ordered_markets[:SHARP_MARKET_LIMIT]:
                 print(f"[EV Debug] Fetching sharp odds for {s}/{market}...")
                 odds = await fetch_sharp_odds(session, s, market)
                 print(f"[EV Debug] Got {len(odds)} odds for {s}/{market}")
