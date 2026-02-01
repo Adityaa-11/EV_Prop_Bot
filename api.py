@@ -883,9 +883,11 @@ async def fetch_sharp_odds(session: aiohttp.ClientSession, sport: str, market: s
                     api_key_manager.update_usage(int(remaining), int(used))
                 
                 if resp.status != 200:
+                    print(f"[Sharp Odds] Event {event['id']} returned status {resp.status}")
                     continue
                 
                 data = await resp.json()
+                print(f"[Sharp Odds] Event {event['id']}: got {len(data.get('bookmakers', []))} bookmakers")
                 
                 # Sort bookmakers by our preference order (Pinnacle first = sharpest)
                 bookmakers = data.get("bookmakers", [])
@@ -1001,6 +1003,74 @@ def get_best_slip_types(win_prob: float, platform: str) -> list[str]:
 @app.get("/")
 async def root():
     return {"message": "EV Dashboard API", "version": "1.0.0"}
+
+
+@app.get("/api/debug/sharp-odds")
+async def debug_sharp_odds(
+    sport: str = Query("nba"),
+    market: str = Query("player_points"),
+):
+    """Debug endpoint to test sharp odds fetching directly."""
+    async with aiohttp.ClientSession() as session:
+        try:
+            sport_key = ODDS_API_SPORTS.get(sport.lower())
+            if not sport_key:
+                return {"error": f"Unknown sport: {sport}", "available": list(ODDS_API_SPORTS.keys())}
+            
+            api_key = get_odds_api_key()
+            if not api_key:
+                return {"error": "No API key configured"}
+            
+            # Get events
+            events_url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/events"
+            async with session.get(events_url, params={"apiKey": api_key}, timeout=15) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    return {"error": f"Events fetch failed: {resp.status}", "detail": text[:500]}
+                events = await resp.json()
+            
+            if not events:
+                return {"error": "No events found", "sport_key": sport_key}
+            
+            # Get odds for first event
+            event = events[0]
+            odds_url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/events/{event['id']}/odds"
+            params = {
+                "apiKey": api_key,
+                "regions": "us,us2,eu",
+                "markets": market,
+                "oddsFormat": "american",
+                "bookmakers": "pinnacle,draftkings,fanduel,betmgm,bovada",
+            }
+            
+            async with session.get(odds_url, params=params, timeout=15) as resp:
+                remaining = resp.headers.get("x-requests-remaining", "unknown")
+                used = resp.headers.get("x-requests-used", "unknown")
+                
+                if resp.status != 200:
+                    text = await resp.text()
+                    return {
+                        "error": f"Odds fetch failed: {resp.status}",
+                        "detail": text[:500],
+                        "url": str(resp.url),
+                        "remaining": remaining,
+                        "used": used,
+                    }
+                
+                data = await resp.json()
+            
+            return {
+                "success": True,
+                "event": event,
+                "bookmakers_count": len(data.get("bookmakers", [])),
+                "bookmakers": [b["key"] for b in data.get("bookmakers", [])],
+                "sample_data": data,
+                "api_remaining": remaining,
+                "api_used": used,
+            }
+        except Exception as e:
+            import traceback
+            return {"error": str(e), "traceback": traceback.format_exc()}
 
 
 @app.get("/api/cache")
@@ -1292,20 +1362,31 @@ async def get_ev_plays(
         
         # Get unique markets needed per sport
         markets_by_sport = {}
+        stat_types_found = set()
         for prop in all_props:
+            stat_types_found.add(prop.stat_type)
             market = PROP_MAPPINGS.get(prop.stat_type)
             if market:
                 if prop.sport not in markets_by_sport:
                     markets_by_sport[prop.sport] = set()
                 markets_by_sport[prop.sport].add(market)
         
+        print(f"[EV Debug] Stat types found: {stat_types_found}")
+        print(f"[EV Debug] Markets by sport: {markets_by_sport}")
+        print(f"[EV Debug] Sports to fetch: {sports_to_fetch}")
+        
         # Fetch sharp odds for each sport and market (prioritizes DraftKings/FanDuel)
         all_odds = []
         for s in sports_to_fetch:
             sport_markets = markets_by_sport.get(s.upper(), set())
+            print(f"[EV Debug] Sport {s} -> markets: {sport_markets}")
             for market in list(sport_markets)[:3]:  # Limit API calls per sport
+                print(f"[EV Debug] Fetching sharp odds for {s}/{market}...")
                 odds = await fetch_sharp_odds(session, s, market)
+                print(f"[EV Debug] Got {len(odds)} odds for {s}/{market}")
                 all_odds.extend(odds)
+        
+        print(f"[EV Debug] Total sharp odds collected: {len(all_odds)}")
         
         if not all_odds:
             return {"count": 0, "plays": [], "sharp_books_used": [], "error": "Could not fetch sharp odds"}
