@@ -857,6 +857,22 @@ SHARP_BOOKS = [
     "fliff",         # Fliff
 ]
 
+# Market priority for EV (fetch these first to maximize matches)
+MARKET_PRIORITY = [
+    "player_points",
+    "player_rebounds",
+    "player_assists",
+    "player_threes",
+    "player_points_rebounds",
+    "player_points_assists",
+    "player_points_rebounds_assists",
+    "player_rebounds_assists",
+    "player_turnovers",
+    "player_blocks",
+    "player_steals",
+    "player_blocks_steals",
+]
+
 async def fetch_sharp_odds(session: aiohttp.ClientSession, sport: str, market: str) -> list[dict]:
     """Fetch odds from The Odds API for a specific market, prioritizing sharp books."""
     if not get_odds_api_key():
@@ -1126,9 +1142,11 @@ async def debug_ev_calc(sport: str = Query("nba")):
             if not markets_needed:
                 return {"error": "No mappable markets"}
             
-            # Get sharp odds for first 2 markets
+            # Get sharp odds for prioritized markets
             all_odds = []
-            for market in list(markets_needed)[:2]:
+            ordered_markets = [m for m in MARKET_PRIORITY if m in markets_needed]
+            ordered_markets.extend([m for m in markets_needed if m not in ordered_markets])
+            for market in ordered_markets[:4]:
                 odds = await fetch_sharp_odds(session, sport, market)
                 all_odds.extend(odds)
             
@@ -1581,7 +1599,11 @@ async def get_ev_plays(
         for s in sports_to_fetch:
             sport_markets = markets_by_sport.get(s.upper(), set())
             print(f"[EV Debug] Sport {s} -> markets: {sport_markets}")
-            for market in list(sport_markets)[:3]:  # Limit API calls per sport
+            # Order markets by priority first, then any remaining
+            ordered_markets = [m for m in MARKET_PRIORITY if m in sport_markets]
+            ordered_markets.extend([m for m in sport_markets if m not in ordered_markets])
+            # Limit API calls per sport to reduce cost, but fetch more than 3
+            for market in ordered_markets[:8]:
                 print(f"[EV Debug] Fetching sharp odds for {s}/{market}...")
                 odds = await fetch_sharp_odds(session, s, market)
                 print(f"[EV Debug] Got {len(odds)} odds for {s}/{market}")
@@ -1636,7 +1658,7 @@ async def get_ev_plays(
                 })
                 
                 # Use first match (sharpest) for EV calculation if line is close
-                if best_odds is None and abs(odds["line"] - prop.line) <= 0.5:
+                if best_odds is None and abs(odds["line"] - prop.line) <= 1.0:
                     best_odds = odds
             
             if best_odds is None:
