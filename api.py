@@ -788,7 +788,9 @@ async def fetch_sleeper_picks(session: aiohttp.ClientSession, sport: str) -> lis
 
 async def fetch_betr_picks(session: aiohttp.ClientSession, sport: str) -> list[Prop]:
     """Fetch Betr Picks props via The Odds API `us_dfs`."""
-    return await fetch_dfs_props_from_odds_api(session, sport, "betr")
+    # Temporarily disabled to save API calls
+    return []
+    # return await fetch_dfs_props_from_odds_api(session, sport, "betr")
 
 async def fetch_chalkboard(session: aiohttp.ClientSession, sport: str) -> list[Prop]:
     """
@@ -1067,6 +1069,87 @@ async def debug_sharp_odds(
                 "sample_data": data,
                 "api_remaining": remaining,
                 "api_used": used,
+            }
+        except Exception as e:
+            import traceback
+            return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+@app.get("/api/debug/ev-matching")
+async def debug_ev_matching(sport: str = Query("nba")):
+    """Debug endpoint to test EV matching logic."""
+    async with aiohttp.ClientSession() as session:
+        try:
+            # Get props
+            pp_props = await fetch_prizepicks(session, sport)
+            ud_props = await fetch_underdog(session, sport)
+            all_props = pp_props + ud_props
+            
+            if not all_props:
+                return {"error": "No props found", "prizepicks": len(pp_props), "underdog": len(ud_props)}
+            
+            # Get markets needed
+            markets_needed = {}
+            for prop in all_props:
+                market = PROP_MAPPINGS.get(prop.stat_type)
+                if market:
+                    if market not in markets_needed:
+                        markets_needed[market] = []
+                    markets_needed[market].append({
+                        "player": prop.player_name,
+                        "line": prop.line,
+                        "stat": prop.stat_type,
+                        "platform": prop.platform,
+                    })
+            
+            # Get sharp odds for first market
+            first_market = list(markets_needed.keys())[0] if markets_needed else None
+            if not first_market:
+                return {"error": "No mappable markets found", "stat_types": [p.stat_type for p in all_props[:10]]}
+            
+            all_odds = await fetch_sharp_odds(session, sport, first_market)
+            
+            # Try to match
+            matches = []
+            no_matches = []
+            
+            for prop in all_props:
+                market = PROP_MAPPINGS.get(prop.stat_type)
+                if market != first_market:
+                    continue
+                
+                relevant_odds = [o for o in all_odds if o["market"] == market]
+                odds_players = [o["player"] for o in relevant_odds]
+                matched_name = match_player(prop.player_name, odds_players)
+                
+                if matched_name:
+                    # Find the matching odds
+                    for odds in relevant_odds:
+                        if odds["player"] == matched_name:
+                            line_diff = abs(odds["line"] - prop.line)
+                            matches.append({
+                                "prop_player": prop.player_name,
+                                "prop_line": prop.line,
+                                "odds_player": matched_name,
+                                "odds_line": odds["line"],
+                                "line_diff": line_diff,
+                                "would_match": line_diff <= 0.5,
+                            })
+                            break
+                else:
+                    no_matches.append({
+                        "prop_player": prop.player_name,
+                        "prop_line": prop.line,
+                        "available_odds_players": odds_players[:10],
+                    })
+            
+            return {
+                "total_props": len(all_props),
+                "market_tested": first_market,
+                "sharp_odds_count": len(all_odds),
+                "matches": matches[:15],
+                "no_matches": no_matches[:10],
+                "markets_needed": {k: len(v) for k, v in markets_needed.items()},
             }
         except Exception as e:
             import traceback
@@ -1390,6 +1473,12 @@ async def get_ev_plays(
         
         if not all_odds:
             return {"count": 0, "plays": [], "sharp_books_used": [], "error": "Could not fetch sharp odds"}
+        
+        # Debug: Show sample of prop players vs sharp odds players
+        prop_players = set((p.player_name, p.stat_type, p.line) for p in all_props[:20])
+        odds_players = set((o["player"], o["market"], o["line"]) for o in all_odds[:50])
+        print(f"[EV Debug] Sample prop players: {list(prop_players)[:5]}")
+        print(f"[EV Debug] Sample odds players: {list(odds_players)[:5]}")
         
         # Analyze each prop
         ev_plays = []
