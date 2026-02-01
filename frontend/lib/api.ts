@@ -28,9 +28,18 @@ export interface SharpOdds {
   is_sharp: boolean
 }
 
+// Individual book odds for comparison table
+export interface BookOdds {
+  bookmaker: string
+  line: number
+  over_odds: number
+  under_odds: number
+}
+
 export interface EVPlay {
   prop: ApiProp
   sharp_odds: SharpOdds | null
+  all_book_odds?: BookOdds[]  // All sportsbook odds for comparison
   recommended_play: "OVER" | "UNDER"
   win_probability: number
   ev_percentage: number

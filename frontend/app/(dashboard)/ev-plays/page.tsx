@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ArrowUp, ArrowDown, RefreshCw, Loader2, AlertCircle, Database } from "lucide-react"
-import { getEVPlays, type EVPlay, type EVResponse } from "@/lib/api"
+import { getEVPlays, type EVPlay, type EVResponse, type BookOdds } from "@/lib/api"
 
 export default function EVPlaysPage() {
   const [data, setData] = useState<(EVResponse & { cached?: boolean; cache_fresh?: boolean }) | null>(null)
@@ -148,85 +148,134 @@ export default function EVPlaysPage() {
   )
 }
 
+// Book name to display abbreviation
+const BOOK_DISPLAY: Record<string, { abbr: string; color: string }> = {
+  pinnacle: { abbr: "PIN", color: "bg-purple-600" },
+  draftkings: { abbr: "DK", color: "bg-green-600" },
+  fanduel: { abbr: "FD", color: "bg-blue-600" },
+  betmgm: { abbr: "MGM", color: "bg-yellow-600" },
+  bovada: { abbr: "BOV", color: "bg-red-600" },
+  betonlineag: { abbr: "BOL", color: "bg-orange-600" },
+  caesars: { abbr: "CZR", color: "bg-teal-600" },
+  betrivers: { abbr: "BR", color: "bg-indigo-600" },
+  lowvig: { abbr: "LV", color: "bg-gray-600" },
+  mybookieag: { abbr: "MB", color: "bg-pink-600" },
+}
+
 function EVPlayAPICard({ play }: { play: EVPlay }) {
-  const { prop, sharp_odds, recommended_play, win_probability, ev_percentage, best_for } = play
+  const { prop, sharp_odds, all_book_odds, recommended_play, win_probability, ev_percentage, best_for } = play
 
   const evColor =
     ev_percentage >= 5 ? "border-green-500" : ev_percentage >= 2 ? "border-yellow-500" : "border-orange-500"
 
   const formatOdds = (odds: number) => (odds > 0 ? `+${odds}` : odds.toString())
+  
+  // Get display info for a book
+  const getBookDisplay = (bookmaker: string) => {
+    return BOOK_DISPLAY[bookmaker] || { abbr: bookmaker.slice(0, 3).toUpperCase(), color: "bg-gray-500" }
+  }
 
   return (
     <Card className={`border-l-4 ${evColor} p-6`}>
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        {/* Left: EV Badge and Player Info */}
-        <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <Badge variant="outline" className="font-mono text-lg font-bold">
-              +{ev_percentage.toFixed(1)}% EV
-            </Badge>
-            <Badge variant="secondary" className="capitalize">
-              {prop.platform}
-            </Badge>
-          </div>
+      <div className="flex flex-col gap-4">
+        {/* Top Row: EV Badge, Player Info, Stats */}
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          {/* Left: EV Badge and Player Info */}
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Badge variant="outline" className="font-mono text-lg font-bold">
+                +{ev_percentage.toFixed(1)}% EV
+              </Badge>
+              <Badge variant="secondary" className="capitalize">
+                {prop.platform}
+              </Badge>
+            </div>
 
-          <div>
-            <h3 className="text-xl font-bold">{prop.player_name}</h3>
-            <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
-              <span>{prop.team}</span>
-              <span>•</span>
-              <span>{prop.sport}</span>
-              {prop.game_time && (
-                <>
-                  <span>•</span>
-                  <span>{new Date(prop.game_time).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}</span>
-                </>
+            <div>
+              <h3 className="text-xl font-bold">{prop.player_name}</h3>
+              <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
+                <span>{prop.team}</span>
+                <span>•</span>
+                <span>{prop.sport}</span>
+                {prop.game_time && (
+                  <>
+                    <span>•</span>
+                    <span>{new Date(prop.game_time).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}</span>
+                  </>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {recommended_play === "OVER" ? (
+                <ArrowUp className="h-5 w-5 text-green-500" />
+              ) : (
+                <ArrowDown className="h-5 w-5 text-red-500" />
               )}
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            {recommended_play === "OVER" ? (
-              <ArrowUp className="h-5 w-5 text-green-500" />
-            ) : (
-              <ArrowDown className="h-5 w-5 text-red-500" />
-            )}
-            <span className="font-semibold">
-              {recommended_play} {prop.line} {prop.stat_type}
-            </span>
-          </div>
-        </div>
-
-        {/* Right: Stats and Best For */}
-        <div className="space-y-3 md:text-right">
-          <div className="flex flex-wrap gap-4 text-sm md:justify-end">
-            <span className="font-numeric">
-              <span className="text-muted-foreground">Win%:</span>{" "}
-              <span className="font-bold">{win_probability.toFixed(1)}%</span>
-            </span>
-            {sharp_odds && (
-              <span className="font-numeric text-muted-foreground">
-                Book: {sharp_odds.bookmaker} {formatOdds(sharp_odds.over_odds)}/{formatOdds(sharp_odds.under_odds)}
+              <span className="font-semibold">
+                {recommended_play} {prop.line} {prop.stat_type}
               </span>
-            )}
+            </div>
           </div>
 
-          {best_for.length > 0 && (
-            <div className="flex flex-wrap gap-2 md:justify-end">
-              {best_for.map((slip) => (
-                <Badge key={slip} variant="outline" className="text-xs">
-                  ✓ {slip.replace("_", "-")}
-                </Badge>
-              ))}
+          {/* Right: Stats and Best For */}
+          <div className="space-y-3 md:text-right">
+            <div className="flex flex-wrap gap-4 text-sm md:justify-end">
+              <span className="font-numeric">
+                <span className="text-muted-foreground">Win%:</span>{" "}
+                <span className="font-bold">{win_probability.toFixed(1)}%</span>
+              </span>
+              <span className="font-numeric">
+                <span className="text-muted-foreground">Fair Odds:</span>{" "}
+                <span className="font-bold">{Math.round(-100 * win_probability / (100 - win_probability))}</span>
+              </span>
             </div>
-          )}
 
-          {sharp_odds?.is_sharp && (
-            <Badge variant="default" className="bg-blue-600">
-              Sharp Line
-            </Badge>
-          )}
+            {best_for.length > 0 && (
+              <div className="flex flex-wrap gap-2 md:justify-end">
+                {best_for.map((slip) => (
+                  <Badge key={slip} variant="outline" className="text-xs">
+                    ✓ {slip.replace("_", "-")}
+                  </Badge>
+                ))}
+              </div>
+            )}
+
+            {sharp_odds?.is_sharp && (
+              <Badge variant="default" className="bg-blue-600">
+                Sharp Line
+              </Badge>
+            )}
+          </div>
         </div>
+
+        {/* Book Odds Comparison Table */}
+        {all_book_odds && all_book_odds.length > 0 && (
+          <div className="mt-2 border-t pt-4">
+            <p className="mb-2 text-xs font-medium text-muted-foreground">Sportsbook Comparison</p>
+            <div className="flex flex-wrap gap-3">
+              {all_book_odds.slice(0, 6).map((book, idx) => {
+                const display = getBookDisplay(book.bookmaker)
+                const isSharp = book.bookmaker === sharp_odds?.bookmaker
+                return (
+                  <div
+                    key={`${book.bookmaker}-${idx}`}
+                    className={`flex flex-col items-center rounded-lg border p-2 text-center ${
+                      isSharp ? "border-primary bg-primary/5" : "border-border"
+                    }`}
+                  >
+                    <Badge className={`${display.color} mb-1 text-xs text-white`}>
+                      {display.abbr}
+                    </Badge>
+                    <span className="text-sm font-bold">{book.line}</span>
+                    <span className="text-xs text-green-600">{formatOdds(book.over_odds)}</span>
+                    <span className="text-xs text-red-600">{formatOdds(book.under_odds)}</span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
       </div>
     </Card>
   )

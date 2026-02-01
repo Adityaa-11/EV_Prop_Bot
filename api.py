@@ -236,37 +236,95 @@ ODDS_API_SPORTS = {
 }
 
 # Prop type mappings (platform stat -> Odds API market)
+# More comprehensive mappings for better coverage
 PROP_MAPPINGS = {
-    # NBA
+    # NBA - Standard
     "Points": "player_points",
     "Rebounds": "player_rebounds",
     "Assists": "player_assists",
     "3-Point Made": "player_threes",
+    "3-Pointers Made": "player_threes",
+    "Three Pointers Made": "player_threes",
     "Pts+Rebs+Asts": "player_points_rebounds_assists",
+    "Pts + Reb + Ast": "player_points_rebounds_assists",
+    "Points + Rebounds + Assists": "player_points_rebounds_assists",
     "Steals": "player_steals",
     "Blocks": "player_blocks",
     "Turnovers": "player_turnovers",
+    "Pts+Rebs": "player_points_rebounds",
+    "Points + Rebounds": "player_points_rebounds",
+    "Pts+Asts": "player_points_assists",
+    "Points + Assists": "player_points_assists",
+    "Rebs+Asts": "player_rebounds_assists",
+    "Rebounds + Assists": "player_rebounds_assists",
+    "Blks+Stls": "player_blocks_steals",
+    "Blocks + Steals": "player_blocks_steals",
+    "Fantasy Score": "player_points_rebounds_assists",  # Close approximation
+    
     # NFL
     "Pass Yards": "player_pass_yds",
+    "Passing Yards": "player_pass_yds",
     "Rush Yards": "player_rush_yds",
+    "Rushing Yards": "player_rush_yds",
     "Receiving Yards": "player_reception_yds",
+    "Rec Yards": "player_reception_yds",
     "Receptions": "player_receptions",
     "Pass TDs": "player_pass_tds",
+    "Passing Touchdowns": "player_pass_tds",
+    "Rush+Rec Yards": "player_rush_reception_yds",
+    "Rushing + Receiving Yards": "player_rush_reception_yds",
+    "Interceptions": "player_interceptions",
+    "Completions": "player_completions",
+    "Pass Attempts": "player_pass_attempts",
+    "Longest Reception": "player_longest_reception",
+    "Longest Rush": "player_longest_rush",
+    
     # MLB
     "Strikeouts": "pitcher_strikeouts",
+    "Pitcher Strikeouts": "pitcher_strikeouts",
     "Hits Allowed": "pitcher_hits_allowed",
+    "Earned Runs": "pitcher_earned_runs",
+    "Walks Allowed": "pitcher_walks",
+    "Total Bases": "batter_total_bases",
+    "Hits": "batter_hits",
+    "RBIs": "batter_rbis",
+    "Runs": "batter_runs",
+    "Home Runs": "batter_home_runs",
+    "Stolen Bases": "batter_stolen_bases",
+    
     # NHL
     "Shots On Goal": "player_shots_on_goal",
+    "Shots": "player_shots_on_goal",
     "Goals": "player_goals",
-    # Underdog stat names (slightly different)
+    "Points": "player_points",  # NHL points = goals + assists
+    "Assists": "player_assists",
+    "Saves": "goalie_saves",
+    "Goals Against": "goalie_goals_against",
+    "Power Play Points": "player_power_play_points",
+    
+    # Soccer
+    "Shots": "player_shots",
+    "Shots On Target": "player_shots_on_target",
+    "Goals": "player_goals_scored",
+    "Assists": "player_assists",
+    "Tackles": "player_tackles",
+    "Passes": "player_passes",
+    
+    # Underdog stat names (lowercase variations)
     "points": "player_points",
     "rebounds": "player_rebounds",
     "assists": "player_assists",
     "pts_rebs_asts": "player_points_rebounds_assists",
     "three_pointers_made": "player_threes",
+    "threes": "player_threes",
+    "steals": "player_steals",
+    "blocks": "player_blocks",
+    "turnovers": "player_turnovers",
     "passing_yards": "player_pass_yds",
     "rushing_yards": "player_rush_yds",
     "receiving_yards": "player_reception_yds",
+    "receptions": "player_receptions",
+    "shots_on_goal": "player_shots_on_goal",
 }
 
 # Break-even percentages by platform and slip type
@@ -423,9 +481,15 @@ DFS_MARKETS_BY_SPORT: dict[str, list[str]] = {
         "player_assists",
         "player_threes",
         "player_points_rebounds_assists",
+        "player_points_rebounds",
+        "player_points_assists",
+        "player_rebounds_assists",
         "player_steals",
         "player_blocks",
+        "player_blocks_steals",
         "player_turnovers",
+        "player_double_double",
+        "player_first_basket",
     ],
     "nfl": [
         "player_pass_yds",
@@ -433,14 +497,39 @@ DFS_MARKETS_BY_SPORT: dict[str, list[str]] = {
         "player_reception_yds",
         "player_receptions",
         "player_pass_tds",
+        "player_rush_tds",
+        "player_reception_tds",
+        "player_rush_reception_yds",
+        "player_interceptions",
+        "player_completions",
+        "player_pass_attempts",
+        "player_anytime_td",
     ],
     "mlb": [
         "pitcher_strikeouts",
         "pitcher_hits_allowed",
+        "pitcher_earned_runs",
+        "pitcher_walks",
+        "batter_total_bases",
+        "batter_hits",
+        "batter_rbis",
+        "batter_runs",
+        "batter_home_runs",
+        "batter_stolen_bases",
     ],
     "nhl": [
         "player_shots_on_goal",
         "player_goals",
+        "player_assists",
+        "player_points",
+        "player_power_play_points",
+        "goalie_saves",
+    ],
+    "soccer": [
+        "player_shots",
+        "player_shots_on_target",
+        "player_goals_scored",
+        "player_assists",
     ],
 }
 
@@ -566,27 +655,22 @@ async def fetch_dfs_props_from_odds_api(
     return props
 
 async def fetch_prizepicks(session: aiohttp.ClientSession, sport: str) -> list[Prop]:
-    """Fetch PrizePicks props. Try direct API first (free), fall back to Odds API if needed."""
-    # Try direct PrizePicks API first (FREE - doesn't use Odds API quota)
-    props = await fetch_prizepicks_direct(session, sport)
-    if props:
-        print(f"[PrizePicks] Got {len(props)} props from direct API for {sport.upper()}")
-        return props
+    """Fetch PrizePicks props via Odds API (direct API is blocked by captcha)."""
+    # NOTE: PrizePicks direct API is blocked by PerimeterX captcha on server requests
+    # Must use Odds API with us_dfs region instead (costs API quota)
     
-    # Fall back to Odds API if direct fails (uses quota)
-    print(f"[PrizePicks] Direct API failed for {sport.upper()}, trying Odds API...")
     props = await fetch_dfs_props_from_odds_api(session, sport, "prizepicks")
     if props:
         print(f"[PrizePicks] Got {len(props)} props from Odds API for {sport.upper()}")
+    else:
+        print(f"[PrizePicks] No props found for {sport.upper()} (Odds API may not have data)")
     return props
 
 
 async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Prop]:
-    """Fetch props from Underdog Fantasy API."""
-    ud_sport = UD_SPORTS.get(sport.lower())
-    if not ud_sport:
-        print(f"[Underdog] Unknown sport: {sport}")
-        return []
+    """Fetch props from Underdog Fantasy API - TESTED AND WORKING."""
+    # Underdog uses sport_id as a string like "NBA", "NFL", etc.
+    target_sport = sport.upper()
     
     url = "https://api.underdogfantasy.com/beta/v6/over_under_lines"
     headers = {
@@ -596,16 +680,10 @@ async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Pro
         "Accept-Encoding": "gzip, deflate, br",
         "Origin": "https://underdogfantasy.com",
         "Referer": "https://underdogfantasy.com/",
-        "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"macOS"',
-        "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-site": "same-site",
     }
     
     try:
-        async with session.get(url, headers=headers, timeout=15) as resp:
+        async with session.get(url, headers=headers, timeout=30) as resp:
             print(f"[Underdog] API response status: {resp.status}")
             if resp.status != 200:
                 print(f"[Underdog] Failed to fetch - status {resp.status}")
@@ -614,54 +692,72 @@ async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Pro
             data = await resp.json()
             
             # Build lookup dictionaries
+            # games[].id is numeric, sport_id is string like "NBA"
             games = {g["id"]: g for g in data.get("games", [])}
+            # appearances[].id is UUID string, has match_id (numeric) and player_id (UUID)
             appearances = {a["id"]: a for a in data.get("appearances", [])}
+            # players[].id is UUID string
             players = {p["id"]: p for p in data.get("players", [])}
             
             print(f"[Underdog] Found {len(games)} games, {len(appearances)} appearances, {len(players)} players")
             
-            # Debug: print unique sport_ids to see what format they're in
-            sport_ids = set()
-            for g in games.values():
-                sport_ids.add(str(g.get("sport_id", "unknown")))
-            print(f"[Underdog] Available sport_ids: {sport_ids}")
+            # Get all over_under_lines
+            lines = data.get("over_under_lines", [])
+            print(f"[Underdog] Found {len(lines)} over_under_lines")
             
             props = []
-            for line in data.get("over_under_lines", []):
-                ou = line.get("over_under", {})
-                app_stat = ou.get("appearance_stat", {})
-                app_id = app_stat.get("appearance_id")
-                app = appearances.get(app_id, {})
-                
-                # Get game info via match_id
-                match_id = app.get("match_id")
-                game = games.get(match_id, {})
-                
-                # Filter by sport - try multiple comparison methods
-                game_sport = str(game.get("sport_id", "")).upper()
-                if game_sport != ud_sport and game_sport != ud_sport.lower():
+            for line in lines:
+                try:
+                    # Get the over_under object which contains appearance_stat
+                    ou = line.get("over_under", {})
+                    app_stat = ou.get("appearance_stat", {})
+                    
+                    # Get appearance_id from appearance_stat (it's like "uuid-uuid")
+                    app_id = app_stat.get("appearance_id")
+                    app = appearances.get(app_id, {})
+                    
+                    # Get game via match_id from appearance
+                    match_id = app.get("match_id")
+                    game = games.get(match_id, {})
+                    
+                    # Filter by sport - game.sport_id is a string like "NBA"
+                    game_sport = game.get("sport_id", "")
+                    if game_sport != target_sport:
+                        continue
+                    
+                    # Get player info via player_id from appearance
+                    player_id = app.get("player_id")
+                    player = players.get(player_id, {})
+                    
+                    # Get stat type from appearance_stat
+                    stat_type = app_stat.get("display_stat") or app_stat.get("stat") or ""
+                    
+                    # Get line value - it's a STRING in the API!
+                    stat_value = line.get("stat_value")
+                    
+                    if stat_value is not None and player:
+                        name = f"{player.get('first_name', '')} {player.get('last_name', '')}".strip()
+                        
+                        if name:
+                            # Get team from game title (e.g., "MIL @ BOS" -> "MIL")
+                            game_title = game.get("title", "") or game.get("abbreviated_title", "")
+                            team = game_title.split(" @ ")[0] if " @ " in game_title else ""
+                            
+                            props.append(Prop(
+                                id=f"ud_{line.get('id', '')}",
+                                player_name=name,
+                                team=team,
+                                sport=target_sport,
+                                stat_type=stat_type,
+                                platform="underdog",
+                                line=float(stat_value),  # Convert string to float
+                                game_time=game.get("scheduled_at", ""),
+                            ))
+                except Exception as e:
+                    # Skip this line if there's an error parsing it
                     continue
-                
-                player_id = app.get("player_id")
-                player = players.get(player_id, {})
-                
-                stat_type = app_stat.get("display_stat") or app_stat.get("stat", "")
-                stat_value = line.get("stat_value")
-                
-                if player and stat_value:
-                    name = f"{player.get('first_name', '')} {player.get('last_name', '')}".strip()
-                    props.append(Prop(
-                        id=f"ud_{line.get('id', '')}",
-                        player_name=name,
-                        team=game.get("title", "").split(" @ ")[0] if " @ " in game.get("title", "") else "",
-                        sport=sport.upper(),
-                        stat_type=stat_type,
-                        platform="underdog",
-                        line=float(stat_value),
-                        game_time=game.get("scheduled_at", ""),
-                    ))
             
-            print(f"[Underdog] Returning {len(props)} props for {sport.upper()}")
+            print(f"[Underdog] Returning {len(props)} props for {target_sport}")
             return props
     except Exception as e:
         print(f"[Underdog] Error: {e}")
@@ -711,7 +807,24 @@ async def fetch_chalkboard(session: aiohttp.ClientSession, sport: str) -> list[P
 # =============================================================================
 
 # Preferred sharp books in order of priority
-SHARP_BOOKS = ["draftkings", "fanduel", "betmgm", "caesars", "pointsbet"]
+# Pinnacle is the sharpest (from EU region), then major US books
+SHARP_BOOKS = [
+    "pinnacle",      # Sharpest book in the world (EU region)
+    "draftkings",    # Sharp US book
+    "fanduel",       # Sharp US book
+    "betmgm",        # Major US book
+    "bovada",        # Good for player props
+    "betonlineag",   # BetOnline - good prop coverage
+    "caesars",       # Major US book
+    "betrivers",     # US regional
+    "lowvig",        # Low vig book
+    "mybookieag",    # MyBookie
+    "espnbet",       # ESPN Bet
+    "hardrockbet",   # Hard Rock
+    "betparx",       # betPARX
+    "betus",         # BetUS
+    "fliff",         # Fliff
+]
 
 async def fetch_sharp_odds(session: aiohttp.ClientSession, sport: str, market: str) -> list[dict]:
     """Fetch odds from The Odds API for a specific market, prioritizing sharp books."""
@@ -726,6 +839,12 @@ async def fetch_sharp_odds(session: aiohttp.ClientSession, sport: str, market: s
         # Get events
         events_url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/events"
         async with session.get(events_url, params={"apiKey": get_odds_api_key()}) as resp:
+            # Update usage from headers
+            remaining = resp.headers.get("x-requests-remaining", "0")
+            used = resp.headers.get("x-requests-used", "0")
+            if str(remaining).isdigit() and str(used).isdigit():
+                api_key_manager.update_usage(int(remaining), int(used))
+            
             # Handle quota exceeded - rotate key and retry
             if resp.status == 403 or resp.status == 401:
                 print(f"[API Keys] Quota exceeded or invalid key, rotating...")
@@ -744,25 +863,31 @@ async def fetch_sharp_odds(session: aiohttp.ClientSession, sport: str, market: s
         
         all_odds = []
         
-        # Get odds for each event (limit to conserve API calls)
-        for event in events[:8]:
+        # Get odds for each event (increased limit for better coverage)
+        for event in events[:12]:  # Increased from 8 to 12 events
             odds_url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/events/{event['id']}/odds"
             params = {
                 "apiKey": get_odds_api_key(),
-                "regions": "us",
+                "regions": "us,us2,eu",  # US + EU to get Pinnacle (sharpest book)
                 "markets": market,
                 "oddsFormat": "american",
-                # Request specific bookmakers - prioritize sharp books
-                "bookmakers": ",".join(SHARP_BOOKS),
+                # Request sharp books - Pinnacle is sharpest, then US books
+                "bookmakers": "pinnacle,draftkings,fanduel,betmgm,bovada,betonlineag,caesars,betrivers,lowvig,mybookieag",
             }
             
             async with session.get(odds_url, params=params) as resp:
+                # Update usage from headers
+                remaining = resp.headers.get("x-requests-remaining", "0")
+                used = resp.headers.get("x-requests-used", "0")
+                if str(remaining).isdigit() and str(used).isdigit():
+                    api_key_manager.update_usage(int(remaining), int(used))
+                
                 if resp.status != 200:
                     continue
                 
                 data = await resp.json()
                 
-                # Sort bookmakers by our preference order
+                # Sort bookmakers by our preference order (Pinnacle first = sharpest)
                 bookmakers = data.get("bookmakers", [])
                 bookmakers.sort(key=lambda b: SHARP_BOOKS.index(b["key"]) if b["key"] in SHARP_BOOKS else 999)
                 
@@ -786,6 +911,10 @@ async def fetch_sharp_odds(session: aiohttp.ClientSession, sport: str, market: s
                         
                         for player, outcomes in player_outcomes.items():
                             if "over" in outcomes and "under" in outcomes:
+                                # Determine if this is a sharp book
+                                # Pinnacle is sharpest, then DK/FD
+                                is_sharp = bookmaker["key"] in ["pinnacle", "draftkings", "fanduel", "lowvig"]
+                                
                                 all_odds.append({
                                     "player": player,
                                     "line": outcomes["over"].get("point", 0),
@@ -793,14 +922,17 @@ async def fetch_sharp_odds(session: aiohttp.ClientSession, sport: str, market: s
                                     "under_odds": outcomes["under"].get("price", -110),
                                     "bookmaker": bookmaker["key"],
                                     "market": market,
-                                    "is_sharp": bookmaker["key"] in SHARP_BOOKS[:2],  # DK/FD are sharpest
+                                    "is_sharp": is_sharp,
                                 })
             
-            await asyncio.sleep(0.3)  # Rate limiting
+            await asyncio.sleep(0.2)  # Slightly faster rate limiting
         
+        print(f"[Sharp Odds] Found {len(all_odds)} odds entries for {market} in {sport}")
         return all_odds
     except Exception as e:
         print(f"Odds API error: {e}")
+        import traceback
+        traceback.print_exc()
         return []
 
 # =============================================================================
@@ -1196,42 +1328,62 @@ async def get_ev_plays(
             if not matched_name:
                 continue
             
+            # Collect ALL book odds for this player/market (for comparison table)
+            all_book_odds = []
+            best_odds = None
+            
             for odds in relevant_odds:
                 if odds["player"] != matched_name:
                     continue
-                if abs(odds["line"] - prop.line) > 0.5:
+                # Allow slightly wider line difference for comparison (1.5 points)
+                if abs(odds["line"] - prop.line) > 1.5:
                     continue
                 
-                over_prob, under_prob = calculate_no_vig(odds["over_odds"], odds["under_odds"])
+                # Add to comparison list
+                all_book_odds.append({
+                    "bookmaker": odds["bookmaker"],
+                    "line": odds["line"],
+                    "over_odds": odds["over_odds"],
+                    "under_odds": odds["under_odds"],
+                })
                 
-                if over_prob > under_prob:
-                    recommended = "OVER"
-                    win_prob = over_prob
-                else:
-                    recommended = "UNDER"
-                    win_prob = under_prob
+                # Use first match (sharpest) for EV calculation if line is close
+                if best_odds is None and abs(odds["line"] - prop.line) <= 0.5:
+                    best_odds = odds
+            
+            if best_odds is None:
+                continue
                 
-                default_be = BREAKEVEN.get(prop.platform, {}).get("default", 54.34)
-                ev_pct = win_prob - default_be
-                
-                if win_prob >= min_win and ev_pct >= min_ev:
-                    ev_plays.append({
-                        "prop": prop.dict(),
-                        "sharp_odds": {
-                            "bookmaker": odds["bookmaker"],
-                            "line": odds["line"],
-                            "over_odds": odds["over_odds"],
-                            "under_odds": odds["under_odds"],
-                            "over_probability": round(over_prob, 2),
-                            "under_probability": round(under_prob, 2),
-                            "is_sharp": odds.get("is_sharp", False),
-                        },
-                        "recommended_play": recommended,
-                        "win_probability": round(win_prob, 2),
-                        "ev_percentage": round(ev_pct, 2),
-                        "best_for": get_best_slip_types(win_prob, prop.platform),
-                    })
-                break
+            over_prob, under_prob = calculate_no_vig(best_odds["over_odds"], best_odds["under_odds"])
+            
+            if over_prob > under_prob:
+                recommended = "OVER"
+                win_prob = over_prob
+            else:
+                recommended = "UNDER"
+                win_prob = under_prob
+            
+            default_be = BREAKEVEN.get(prop.platform, {}).get("default", 54.34)
+            ev_pct = win_prob - default_be
+            
+            if win_prob >= min_win and ev_pct >= min_ev:
+                ev_plays.append({
+                    "prop": prop.dict(),
+                    "sharp_odds": {
+                        "bookmaker": best_odds["bookmaker"],
+                        "line": best_odds["line"],
+                        "over_odds": best_odds["over_odds"],
+                        "under_odds": best_odds["under_odds"],
+                        "over_probability": round(over_prob, 2),
+                        "under_probability": round(under_prob, 2),
+                        "is_sharp": best_odds.get("is_sharp", False),
+                    },
+                    "all_book_odds": all_book_odds,  # All sportsbook odds for comparison
+                    "recommended_play": recommended,
+                    "win_probability": round(win_prob, 2),
+                    "ev_percentage": round(ev_pct, 2),
+                    "best_for": get_best_slip_types(win_prob, prop.platform),
+                })
         
         # Sort by EV
         ev_plays.sort(key=lambda x: x["ev_percentage"], reverse=True)
