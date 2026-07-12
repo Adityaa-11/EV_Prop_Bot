@@ -12,7 +12,7 @@ export function AppHeader() {
 
   const handleRefresh = () => {
     setLastUpdated(new Date())
-    // In a real app, this would trigger data refetch
+    window.location.reload()
   }
 
   const formatLastUpdated = (date: Date) => {

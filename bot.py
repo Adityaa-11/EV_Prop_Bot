@@ -20,6 +20,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 WEBHOOK_PRIZEPICKS = os.getenv("DISCORD_WEBHOOK_PRIZEPICKS")
 WEBHOOK_UNDERDOG = os.getenv("DISCORD_WEBHOOK_UNDERDOG")
+API_BASE_URL = os.getenv("BACKEND_URL") or f"http://127.0.0.1:{os.getenv('PORT', '8000')}"
 
 # League mappings
 LEAGUE_IDS = {"nba": 7, "nfl": 2, "mlb": 3, "nhl": 8, "ncaab": 10, "ncaaf": 4, "soccer": 17}
@@ -71,7 +72,7 @@ async def fetch_pp(session, league):
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "application/json",
         "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
+        "Accept-Encoding": "gzip, deflate",
         "Referer": "https://app.prizepicks.com/",
         "Origin": "https://app.prizepicks.com",
         "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
@@ -257,34 +258,55 @@ async def send_plays_to_webhook(session, plays, sport, source, breakeven):
 # =============================================================================
 
 async def analyze_platform(session, sport, source, fetch_func, breakeven_key):
-    """Analyze props from a platform and find +EV plays"""
-    props = await fetch_func(session, sport)
-    if not props:
-        return [], f"No {source} props found"
-    
-    markets = set(PROP_MAPPINGS.get(p.stat) for p in props if p.stat in PROP_MAPPINGS)
-    all_odds = []
-    for m in list(markets)[:5]:
-        all_odds.extend(await fetch_odds(session, sport, m))
-    
-    if not all_odds:
-        return [], "No odds found"
-    
-    breakeven = BREAKEVEN_PP[breakeven_key] if source == "prizepicks" else BREAKEVEN_UD.get(breakeven_key, 52.38)
-    
+    """Read the canonical FastAPI scoring pipeline used by the dashboard."""
+    params = {
+        "sport": sport.lower(),
+        "platform": source.lower(),
+        "min_ev": 0,
+        "min_win": 0,
+        "min_books": 1,
+    }
+    try:
+        async with session.get(
+            f"{API_BASE_URL}/api/ev",
+            params=params,
+            timeout=aiohttp.ClientTimeout(total=90),
+        ) as response:
+            if response.status != 200:
+                return [], f"Canonical API returned HTTP {response.status}"
+            payload = await response.json()
+    except Exception as exc:
+        return [], f"Canonical API unavailable: {exc}"
+
+    breakeven = (
+        BREAKEVEN_PP[breakeven_key]
+        if source == "prizepicks"
+        else BREAKEVEN_UD.get(breakeven_key, 52.38)
+    )
     plays = []
-    for p in props:
-        m = match(p.player, [o.player for o in all_odds])
-        if not m: continue
-        for o in all_odds:
-            if o.player != m or abs(o.line - p.line) > 0.5: continue
-            op, up = no_vig(o.over, o.under)
-            if max(op, up) >= breakeven:
-                play = "OVER" if op > up else "UNDER"
-                plays.append({"player": p.player, "team": p.team, "stat": p.stat, "line": p.line, "play": play, "win": max(op, up), "book": o.book, "ov": o.over, "un": o.under})
-            break
-    
-    plays.sort(key=lambda x: x["win"], reverse=True)
+    for candidate in payload.get("plays", []):
+        if candidate.get("win_probability", 0) < breakeven:
+            continue
+        prop = candidate.get("prop", {})
+        representative = candidate.get("sharp_odds") or {}
+        plays.append(
+            {
+                "candidate_id": candidate.get("candidate_id"),
+                "player": prop.get("player_name", ""),
+                "team": prop.get("team", ""),
+                "stat": prop.get("stat_type", ""),
+                "line": prop.get("line", 0),
+                "play": candidate.get("recommended_play", ""),
+                "win": candidate.get("win_probability", 0),
+                "book": representative.get("bookmaker", ""),
+                "ov": representative.get("over_odds", -110),
+                "un": representative.get("under_odds", -110),
+                "all_book_odds": candidate.get("all_book_odds", []),
+                "confidence": candidate.get("consensus", {}).get("confidence", "low"),
+            }
+        )
+
+    plays.sort(key=lambda play: play["win"], reverse=True)
     return plays, None
 
 # =============================================================================
@@ -420,13 +442,24 @@ async def player(ctx, *, name: str):
     async with aiohttp.ClientSession() as s:
         found = []
         for sp in ["nba", "nfl", "mlb", "nhl"]:
-            for p in await fetch_pp(s, sp):
-                if fuzz.partial_ratio(name.lower(), p.player.lower()) >= 80: found.append(p)
-            for p in await fetch_ud(s, sp):
-                if fuzz.partial_ratio(name.lower(), p.player.lower()) >= 80: found.append(p)
+            try:
+                async with s.get(
+                    f"{API_BASE_URL}/api/props",
+                    params={"sport": sp, "player": name},
+                    timeout=aiohttp.ClientTimeout(total=60),
+                ) as response:
+                    if response.status == 200:
+                        found.extend((await response.json()).get("props", []))
+            except Exception:
+                continue
         if not found: await ctx.send("Not found"); return
         e = discord.Embed(title=f"Props: {name}", color=discord.Color.blue())
-        for p in found[:15]: e.add_field(name=f"{p.stat} ({p.source})", value=f"Line: {p.line}\nTeam: {p.team}", inline=True)
+        for prop in found[:15]:
+            e.add_field(
+                name=f"{prop.get('stat_type', '')} ({prop.get('platform', '')})",
+                value=f"Line: {prop.get('line')}\nTeam: {prop.get('team', '')}",
+                inline=True,
+            )
         await ctx.send(embed=e)
 
 @bot.command(name="calc")

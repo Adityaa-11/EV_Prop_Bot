@@ -47,12 +47,11 @@ def main():
         # Run both (default for production)
         print("Starting both API server and Discord bot...")
         
-        # Run API in a separate thread
-        api_thread = threading.Thread(target=run_api, daemon=True)
-        api_thread.start()
-        
-        # Run bot in main thread (it has its own event loop)
-        run_bot()
+        # Keep the web process in the main thread so Railway health and
+        # lifecycle management follow the API rather than the Discord client.
+        bot_thread = threading.Thread(target=run_bot, daemon=True)
+        bot_thread.start()
+        run_api()
 
 if __name__ == "__main__":
     main()

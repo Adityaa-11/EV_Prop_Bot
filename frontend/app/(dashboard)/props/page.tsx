@@ -76,9 +76,9 @@ export default function PropsPage() {
               {data.cache_fresh ? "Cached" : "Stale"}
             </Badge>
           )}
-          <Button onClick={() => fetchData(true)} disabled={loading} variant="outline" size="sm">
+          <Button onClick={() => fetchData(false)} disabled={loading} variant="outline" size="sm">
             {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-            Refresh
+            Reload Snapshot
           </Button>
         </div>
       </div>

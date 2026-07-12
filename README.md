@@ -7,18 +7,20 @@ A full-stack application to find profitable (+EV) plays on **PrizePicks** and **
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │    Frontend     │────▶│   FastAPI API   │────▶│  External APIs  │
-│  (Vercel/Next)  │     │    (Railway)    │     │  (PP, UD, Odds) │
+│  (Vercel/Next)  │     │    (Railway)    │     │  (UD, Odds API) │
 └─────────────────┘     └────────┬────────┘     └─────────────────┘
                                  │
                         ┌────────▼────────┐
-                        │   Discord Bot   │
-                        │  (Same Server)  │
+                        │ SQLite + Bot +  │
+                        │ Hermes API      │
                         └─────────────────┘
 ```
 
 - **Frontend**: Next.js dashboard hosted on Vercel
 - **Backend**: FastAPI + Discord bot hosted on Railway
-- **Data Sources**: PrizePicks API, Underdog API, The Odds API
+- **Data Sources**: PrizePicks through The Odds API `us_dfs`, Underdog direct API, sportsbook prices through The Odds API
+- **Scoring**: exact-line, same-event, weighted no-vig sportsbook consensus
+- **Storage**: durable SQLite snapshots and settlement history
 
 ---
 
@@ -74,12 +76,17 @@ DISCORD_TOKEN=your_discord_bot_token
 DISCORD_WEBHOOK_PRIZEPICKS=https://discord.com/api/webhooks/...
 DISCORD_WEBHOOK_UNDERDOG=https://discord.com/api/webhooks/...
 ODDS_API_KEY=your_odds_api_key
+ADMIN_API_KEY=generate_a_long_random_secret
+HERMES_API_KEY=generate_a_different_long_random_secret
+DATABASE_PATH=/data/ev_bot.db
 FRONTEND_URL=https://your-app.vercel.app
+BACKEND_URL=https://your-app.up.railway.app
 PORT=8000
 RUN_MODE=both
 ```
 
-6. Copy your Railway URL (e.g., `https://your-app.up.railway.app`)
+6. Attach a Railway volume at `/data` so snapshots survive deploys.
+7. Copy your Railway URL (e.g., `https://your-app.up.railway.app`)
 
 ### Step 3: Deploy Frontend to Vercel
 
@@ -156,10 +163,55 @@ Open http://localhost:3000
 | `GET /api/games?sport=nba` | Get games summary |
 | `GET /api/compare/{player}` | Compare player across platforms |
 | `POST /api/calc` | Calculate no-vig odds |
+| `POST /api/calc-entry-ev` | Calculate payout-aware entry EV |
+| `POST /api/hermes/scan` | Protected quota-consuming scan (`X-Hermes-Key`) |
+| `GET /api/hermes/candidates` | Protected latest candidate snapshot |
+| `GET /api/hermes/runs` | Protected pipeline run history |
+| `POST /api/hermes/outcomes/{id}` | Protected settlement/CLV recording |
+| `GET /api/paper` | Public read-only paper bankroll, slips, and live status |
+| `GET /api/paper/line-history` | Public persisted observation history |
+| `POST /api/hermes/paper/tick` | Protected event-gated paper automation heartbeat |
+| `POST /api/hermes/paper/deliver` | Protected Discord paper-slip delivery retry |
+| `POST /api/hermes/paper/settle` | Protected MLB settlement pass |
+| `POST /api/hermes/paper/entries/{id}/settle` | Protected manual paper settlement |
+
+Public dashboard routes only read snapshots. Upstream refreshes, key rotation,
+debugging, and cache administration require `X-Hermes-Key` or `X-Admin-Key`.
+
+Paper automation runs inside the Railway API process when
+`PAPER_SCHEDULER_ENABLED=true`. It checks the free events endpoint before a paid
+scan, adapts cadence as lock approaches, requires two stable candidate
+observations, posts Discord slips labeled `PAPER — NO REAL WAGER`, records CLV,
+and settles supported MLB markets. Creating zero slips is a successful outcome.
+
+Kill switch / rollback:
+
+```bash
+# Railway variable
+PAPER_SCHEDULER_ENABLED=false
+```
+
+Also require `DATABASE_PATH=/data/ev_bot.db` with a Railway volume mounted at
+`/data` before enabling the scheduler.
+
+The `/paper-trading` dashboard polls the paper ledger every ten seconds.
+
+Production smoke test:
+
+```bash
+HERMES_API_KEY=... python scripts/smoke_test.py https://your-api.up.railway.app --scan --sport mlb
+```
 
 ---
 
-## 💰 Break-Even Percentages
+## 💰 Candidate Edge and Entry EV
+
+Candidate `ev_percentage` is retained for frontend compatibility and represents
+probability edge over the configured platform break-even—not guaranteed dollar
+profit. Use `POST /api/calc-entry-ev` with the current platform payout table to
+calculate entry-level expected ROI. That calculation assumes independent legs.
+
+### Break-Even Percentages
 
 ### PrizePicks
 
@@ -186,6 +238,8 @@ Open http://localhost:3000
 ├── api.py              # FastAPI backend
 ├── bot.py              # Discord bot
 ├── main.py             # Unified runner for Railway
+├── storage.py          # SQLite snapshots and outcome history
+├── tests/              # Deterministic scoring/storage tests
 ├── Procfile            # Railway deployment config
 ├── requirements.txt    # Python dependencies
 ├── env.example         # Environment template
@@ -208,7 +262,9 @@ Open http://localhost:3000
 | PrizePicks | No official limit (be respectful) |
 | Underdog | No official limit (be respectful) |
 
-**Tip**: The Odds API free tier is limited. Consider upgrading ($15/month) for heavy use.
+**Tip**: The Odds API charges per event/market. Keep public refresh disabled and
+let one authenticated scheduler trigger sport-specific scans within a fixed
+quota budget.
 
 ---
 

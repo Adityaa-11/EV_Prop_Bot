@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ArrowUp, ArrowDown, RefreshCw, Loader2, AlertCircle, Database } from "lucide-react"
-import { getEVPlays, type EVPlay, type EVResponse, type BookOdds } from "@/lib/api"
+import { getEVPlays, type EVPlay, type EVResponse } from "@/lib/api"
 
 export default function EVPlaysPage() {
   const [data, setData] = useState<(EVResponse & { cached?: boolean; cache_fresh?: boolean }) | null>(null)
@@ -63,9 +63,9 @@ export default function EVPlaysPage() {
               {data.cache_fresh ? "Cached" : "Stale"}
             </Badge>
           )}
-          <Button onClick={() => fetchData(true)} disabled={loading} variant="outline" size="sm">
+          <Button onClick={() => fetchData(false)} disabled={loading} variant="outline" size="sm">
             {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-            Refresh
+            Reload Snapshot
           </Button>
         </div>
       </div>
@@ -163,7 +163,7 @@ const BOOK_DISPLAY: Record<string, { abbr: string; color: string }> = {
 }
 
 function EVPlayAPICard({ play }: { play: EVPlay }) {
-  const { prop, sharp_odds, all_book_odds, recommended_play, win_probability, ev_percentage, best_for } = play
+  const { prop, sharp_odds, all_book_odds, consensus, recommended_play, win_probability, ev_percentage, best_for } = play
 
   const evColor =
     ev_percentage >= 5 ? "border-green-500" : ev_percentage >= 2 ? "border-yellow-500" : "border-orange-500"
@@ -184,7 +184,7 @@ function EVPlayAPICard({ play }: { play: EVPlay }) {
           <div className="space-y-3">
             <div className="flex items-center gap-2">
               <Badge variant="outline" className="font-mono text-lg font-bold">
-                +{ev_percentage.toFixed(1)}% EV
+              {ev_percentage >= 0 ? "+" : ""}{ev_percentage.toFixed(1)}% Edge
               </Badge>
               <Badge variant="secondary" className="capitalize">
                 {prop.platform}
@@ -227,8 +227,15 @@ function EVPlayAPICard({ play }: { play: EVPlay }) {
               </span>
               <span className="font-numeric">
                 <span className="text-muted-foreground">Fair Odds:</span>{" "}
-                <span className="font-bold">{Math.round(-100 * win_probability / (100 - win_probability))}</span>
+                <span className="font-bold">
+                  {consensus?.fair_odds ?? Math.round(-100 * win_probability / (100 - win_probability))}
+                </span>
               </span>
+              {consensus && (
+                <span className="font-numeric text-muted-foreground">
+                  {consensus.book_count} exact-line {consensus.book_count === 1 ? "book" : "books"} • {consensus.confidence} confidence
+                </span>
+              )}
             </div>
 
             {best_for.length > 0 && (
@@ -256,7 +263,7 @@ function EVPlayAPICard({ play }: { play: EVPlay }) {
             <div className="flex flex-wrap gap-3">
               {all_book_odds.slice(0, 6).map((book, idx) => {
                 const display = getBookDisplay(book.bookmaker)
-                const isSharp = book.bookmaker === sharp_odds?.bookmaker
+                const isSharp = book.used_in_consensus
                 return (
                   <div
                     key={`${book.bookmaker}-${idx}`}

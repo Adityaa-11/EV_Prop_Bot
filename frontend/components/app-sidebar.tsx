@@ -3,7 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { Calendar, List, TrendingUp, GitCompare, Activity, Settings, Menu, FileText } from "lucide-react"
+import { Calendar, List, TrendingUp, GitCompare, Activity, Settings, Menu, FileText, WalletCards } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
@@ -12,6 +12,7 @@ const navigationItems = [
   { name: "Games", href: "/games", icon: Calendar },
   { name: "Props", href: "/props", icon: List },
   { name: "+EV Plays", href: "/ev-plays", icon: TrendingUp },
+  { name: "Paper Trading", href: "/paper-trading", icon: WalletCards },
   { name: "Middles", href: "/middles", icon: GitCompare },
   { name: "Line Movement", href: "/line-movement", icon: Activity },
   { name: "Settings", href: "/settings", icon: Settings },

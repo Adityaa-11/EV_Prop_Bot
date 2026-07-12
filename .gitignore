@@ -37,6 +37,12 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Runtime data
+.data/
+*.db
+*.db-shm
+*.db-wal
+
 # Build outputs
 dist/
 build/

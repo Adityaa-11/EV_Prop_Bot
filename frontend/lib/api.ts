@@ -16,6 +16,10 @@ export interface ApiProp {
   platform: string
   line: number
   game_time: string | null
+  event_id?: string | null
+  market_key?: string | null
+  is_alternate?: boolean
+  captured_at?: string
 }
 
 export interface SharpOdds {
@@ -34,15 +38,26 @@ export interface BookOdds {
   line: number
   over_odds: number
   under_odds: number
+  used_in_consensus?: boolean
 }
 
 export interface EVPlay {
+  candidate_id?: string
   prop: ApiProp
   sharp_odds: SharpOdds | null
   all_book_odds?: BookOdds[]  // All sportsbook odds for comparison
+  consensus?: {
+    method: string
+    book_count: number
+    dispersion: number
+    confidence: "low" | "medium" | "high"
+    fair_odds: number
+  }
   recommended_play: "OVER" | "UNDER"
   win_probability: number
   ev_percentage: number
+  probability_edge?: number
+  ev_method?: string
   best_for: string[]
 }
 
@@ -75,6 +90,110 @@ export interface EVResponse {
   sport: string
   sharp_books_used: string[]
   plays: EVPlay[]
+}
+
+export interface PaperLeg {
+  candidate_id: string
+  player_name: string
+  stat_type: string
+  side: "OVER" | "UNDER"
+  line: number
+  game_time: string | null
+  win_probability: number
+  book_count: number
+  entry_line: number
+  closing_line: number | null
+  line_clv: number | null
+  closing_probability?: number | null
+  probability_clv?: number | null
+}
+
+export interface PaperEntry {
+  id: string
+  platform: "prizepicks" | "underdog"
+  sport: string
+  status: "open" | "settled"
+  execution_mode: "paper"
+  tier: "excellent" | "strong"
+  stake: number
+  expected_roi: number
+  potential_payout: number
+  lock_time: string | null
+  created_at: string
+  settled_at: string | null
+  result: "win" | "loss" | "push" | "void" | null
+  payout: number | null
+  profit: number | null
+  delivery_status: string
+  delivery_attempts?: number
+  delivery_error?: string | null
+  legs: PaperLeg[]
+}
+
+export interface PaperResponse {
+  mode: "paper"
+  summary: {
+    starting_bankroll: number
+    bankroll: number
+    profit: number
+    exposure: number
+    entries: number
+    open_entries: number
+    wins: number
+    losses: number
+    pushes: number
+    win_rate: number
+    daily_staked: number
+    daily_profit?: number
+    last_updated: string | null
+  }
+  entries: PaperEntry[]
+  automation: {
+    status: string
+    sport?: string
+    message?: string | null
+    candidate_count?: number
+    watch_count?: number
+    created_count?: number
+    checked_at?: string
+  }
+  scheduler?: {
+    enabled?: boolean
+    running?: boolean
+    status?: string
+    checked_at?: string
+    message?: string
+    created_count?: number
+  }
+  quota?: {
+    scans_today: number
+    scan_cap: number
+    remaining_scans: number
+  }
+  delivery_failures?: number
+  settlement_backlog?: number
+  updated_at: string
+}
+
+export interface LineObservation {
+  candidate_id: string
+  platform: string
+  sport: string
+  event_id: string | null
+  player_name: string
+  market_key: string
+  side: string
+  line: number
+  win_probability: number
+  book_count: number
+  dispersion: number
+  game_time: string | null
+  observed_at: string
+}
+
+export interface LineHistoryResponse {
+  count: number
+  observations: LineObservation[]
 }
 
 export interface MiddlesResponse {
@@ -132,6 +251,25 @@ async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> 
 // Health check
 export async function checkHealth(): Promise<HealthResponse> {
   return fetchApi<HealthResponse>("/api/health")
+}
+
+export async function getPaperDashboard(): Promise<PaperResponse> {
+  return fetchApi<PaperResponse>("/api/paper")
+}
+
+export async function getLineHistory(params: {
+  sport?: string
+  platform?: string
+  player?: string
+  limit?: number
+} = {}): Promise<LineHistoryResponse> {
+  const searchParams = new URLSearchParams()
+  if (params.sport) searchParams.set("sport", params.sport)
+  if (params.platform) searchParams.set("platform", params.platform)
+  if (params.player) searchParams.set("player", params.player)
+  if (params.limit) searchParams.set("limit", params.limit.toString())
+  const query = searchParams.toString()
+  return fetchApi<LineHistoryResponse>(`/api/paper/line-history${query ? `?${query}` : ""}`)
 }
 
 // Odds API usage
@@ -216,6 +354,7 @@ export async function getEVPlays(params: {
   platform?: string
   minEv?: number
   minWin?: number
+  minBooks?: number
   refresh?: boolean
 }): Promise<EVResponse> {
   const searchParams = new URLSearchParams()
@@ -223,6 +362,7 @@ export async function getEVPlays(params: {
   if (params.platform) searchParams.set("platform", params.platform)
   if (params.minEv !== undefined) searchParams.set("min_ev", params.minEv.toString())
   if (params.minWin !== undefined) searchParams.set("min_win", params.minWin.toString())
+  if (params.minBooks !== undefined) searchParams.set("min_books", params.minBooks.toString())
   if (params.refresh) searchParams.set("refresh", "true")
   
   const query = searchParams.toString()
