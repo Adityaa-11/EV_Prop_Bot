@@ -41,7 +41,9 @@ export default function PaperTradingPage() {
       setData(response)
       setError(null)
     } catch {
-      setError("Unable to load the paper portfolio")
+      setError(
+        `Unable to load the paper portfolio from ${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}`,
+      )
     } finally {
       setLoading(false)
     }
@@ -135,7 +137,9 @@ export default function PaperTradingPage() {
             {data?.delivery_failures ?? 0} delivery fails · {data?.settlement_backlog ?? 0} unsettled
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Kill switch: PAPER_SCHEDULER_ENABLED=false
+            {scheduler?.enabled
+              ? "Kill switch: set PAPER_SCHEDULER_ENABLED=false on Railway"
+              : "Kill switch active: PAPER_SCHEDULER_ENABLED=false"}
           </p>
         </Card>
       </div>

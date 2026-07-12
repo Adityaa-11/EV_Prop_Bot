@@ -285,17 +285,30 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Allow frontend to access API
-# More permissive CORS for development and Vercel preview deployments
-allowed_origins = [
-    FRONTEND_URL,
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
+# Allow frontend to access API.
+# FRONTEND_URL can be a single origin or a comma-separated list.
+# Also allow any *.vercel.app host so preview/production deploys work
+# even if FRONTEND_URL is stale on Railway.
+_frontend_origins = [
+    origin.strip().rstrip("/")
+    for origin in str(FRONTEND_URL).split(",")
+    if origin.strip()
 ]
+allowed_origins = list(
+    dict.fromkeys(
+        [
+            *_frontend_origins,
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "https://ev-prop-bot.vercel.app",
+        ]
+    )
+)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
