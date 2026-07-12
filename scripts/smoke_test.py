@@ -3,6 +3,7 @@
 Usage:
     HERMES_API_KEY=... python scripts/smoke_test.py https://your-api.example
     HERMES_API_KEY=... python scripts/smoke_test.py https://your-api.example --scan --sport mlb
+    python scripts/smoke_test.py https://your-api.example --paper-only
 """
 
 from __future__ import annotations
@@ -35,7 +36,12 @@ def request_json(
         with urllib.request.urlopen(request, timeout=120) as response:
             return response.status, json.loads(response.read())
     except urllib.error.HTTPError as error:
-        return error.code, json.loads(error.read())
+        body = error.read()
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            payload = {"detail": body.decode(errors="replace")[:300]}
+        return error.code, payload
 
 
 def main() -> int:
@@ -44,12 +50,10 @@ def main() -> int:
     parser.add_argument("--sport", default="mlb")
     parser.add_argument("--platform", default="all", choices=["all", "prizepicks", "underdog"])
     parser.add_argument("--scan", action="store_true")
+    parser.add_argument("--paper-only", action="store_true")
     arguments = parser.parse_args()
 
     hermes_key = os.getenv("HERMES_API_KEY")
-    if not hermes_key:
-        print("HERMES_API_KEY is required", file=sys.stderr)
-        return 2
 
     health_status, health = request_json(arguments.base_url, "/api/health")
     print(
@@ -60,11 +64,36 @@ def main() -> int:
                 "status": health.get("status"),
                 "odds_api_configured": health.get("odds_api_configured"),
                 "hermes_api_configured": health.get("hermes_api_configured"),
+                "paper_scheduler": health.get("paper_scheduler"),
+                "paper_quota": health.get("paper_quota"),
             }
         )
     )
     if health_status != 200 or health.get("status") != "ok":
         return 1
+
+    paper_status, paper = request_json(arguments.base_url, "/api/paper")
+    print(
+        json.dumps(
+            {
+                "check": "paper",
+                "http": paper_status,
+                "mode": paper.get("mode"),
+                "entries": len(paper.get("entries", [])),
+                "scheduler": paper.get("scheduler"),
+                "quota": paper.get("quota"),
+            }
+        )
+    )
+    if paper_status != 200:
+        return 1
+
+    if arguments.paper_only:
+        return 0
+
+    if not hermes_key:
+        print("HERMES_API_KEY is required for protected checks", file=sys.stderr)
+        return 2
 
     if arguments.scan:
         query = urllib.parse.urlencode(
@@ -95,11 +124,11 @@ def main() -> int:
 
     candidates_status, candidates = request_json(
         arguments.base_url,
-            (
-                f"/api/hermes/candidates?"
-                f"sport={urllib.parse.quote(arguments.sport)}&"
-                f"platform={urllib.parse.quote(arguments.platform)}"
-            ),
+        (
+            f"/api/hermes/candidates?"
+            f"sport={urllib.parse.quote(arguments.sport)}&"
+            f"platform={urllib.parse.quote(arguments.platform)}"
+        ),
         hermes_key=hermes_key,
     )
     print(
@@ -118,4 +147,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
