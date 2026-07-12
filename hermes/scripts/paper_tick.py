@@ -48,7 +48,10 @@ def main() -> int:
 
     sports = [
         sport.strip().lower()
-        for sport in os.getenv("PAPER_SPORTS", "mlb,nba,nfl,nhl").split(",")
+        for sport in os.getenv(
+            "PAPER_SPORTS",
+            "mlb,nba,nfl,nhl,wnba,ncaab,ncaaf,cfl,mls,epl,summer",
+        ).split(",")
         if sport.strip()
     ]
     messages = []

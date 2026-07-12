@@ -17,7 +17,7 @@ export function PropsFilters() {
   const [selectedPlatforms, setSelectedPlatforms] = React.useState<string[]>(["PrizePicks", "Underdog", "Sleeper"])
   const [selectedStats, setSelectedStats] = React.useState<string[]>(["Points", "Rebounds", "Assists"])
 
-  const sports = ["NBA", "NFL", "NHL", "MLB", "NCAAB", "NCAAF"]
+  const sports = ["NBA", "NFL", "NHL", "MLB", "WNBA", "NCAAB", "NCAAF", "CFL", "MLS", "EPL", "SUMMER"]
   const platforms = ["PrizePicks", "Underdog", "Sleeper", "Betr"]
   const stats = ["Points", "Rebounds", "Assists", "3-Ptrs", "Blocks", "Steals"]
 

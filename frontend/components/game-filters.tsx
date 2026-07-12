@@ -4,6 +4,7 @@ import * as React from "react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
+import { SPORT_OPTIONS } from "@/lib/sports"
 
 export function GameFilters() {
   const [hideStarted, setHideStarted] = React.useState(false)
@@ -19,13 +20,11 @@ export function GameFilters() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Sports</SelectItem>
-            <SelectItem value="nba">NBA</SelectItem>
-            <SelectItem value="nfl">NFL</SelectItem>
-            <SelectItem value="nhl">NHL</SelectItem>
-            <SelectItem value="mlb">MLB</SelectItem>
-            <SelectItem value="ncaab">NCAAB</SelectItem>
-            <SelectItem value="ncaaf">NCAAF</SelectItem>
+            {SPORT_OPTIONS.map((sport) => (
+              <SelectItem key={sport.value} value={sport.value}>
+                {sport.label}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
       </div>

@@ -20,12 +20,16 @@ const navigationItems = [
 ]
 
 const sportsFilters = [
+  { name: "MLB", code: "MLB" },
   { name: "NBA", code: "NBA" },
   { name: "NFL", code: "NFL" },
   { name: "NHL", code: "NHL" },
-  { name: "MLB", code: "MLB" },
+  { name: "WNBA", code: "WNBA" },
   { name: "NCAAB", code: "NCAAB" },
   { name: "NCAAF", code: "NCAAF" },
+  { name: "CFL", code: "CFL" },
+  { name: "MLS", code: "MLS" },
+  { name: "EPL", code: "EPL" },
 ]
 
 export function AppSidebar() {

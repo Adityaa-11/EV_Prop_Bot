@@ -23,11 +23,32 @@ WEBHOOK_UNDERDOG = os.getenv("DISCORD_WEBHOOK_UNDERDOG")
 API_BASE_URL = os.getenv("BACKEND_URL") or f"http://127.0.0.1:{os.getenv('PORT', '8000')}"
 
 # League mappings
-LEAGUE_IDS = {"nba": 7, "nfl": 2, "mlb": 3, "nhl": 8, "ncaab": 10, "ncaaf": 4, "soccer": 17}
-ODDS_API_SPORTS = {"nba": "basketball_nba", "nfl": "americanfootball_nfl", "mlb": "baseball_mlb", "nhl": "icehockey_nhl", "ncaab": "basketball_ncaab", "ncaaf": "americanfootball_ncaaf", "soccer": "soccer_epl"}
+LEAGUE_IDS = {
+    "nba": 7, "nfl": 2, "mlb": 3, "nhl": 8, "ncaab": 10, "ncaaf": 4,
+    "soccer": 17, "mls": 17, "epl": 17,
+}
+ODDS_API_SPORTS = {
+    "nba": "basketball_nba",
+    "nfl": "americanfootball_nfl",
+    "mlb": "baseball_mlb",
+    "nhl": "icehockey_nhl",
+    "wnba": "basketball_wnba",
+    "ncaab": "basketball_ncaab",
+    "ncaaf": "americanfootball_ncaaf",
+    "cfl": "americanfootball_cfl",
+    "mls": "soccer_usa_mls",
+    "soccer": "soccer_epl",
+    "epl": "soccer_epl",
+    "summer": "basketball_nba_summer_league",
+}
 
 # Underdog sport mappings
-UD_SPORTS = {"nba": "NBA", "nfl": "NFL", "mlb": "MLB", "nhl": "NHL"}
+UD_SPORTS = {
+    "nba": "NBA", "nfl": "NFL", "mlb": "MLB", "nhl": "NHL",
+    "wnba": "WNBA", "cfl": "CFL", "ncaab": "CBB", "ncaaf": "CFB",
+    "soccer": "FIFA", "mls": "FIFA", "epl": "FIFA",
+    "summer": "BASKETBALL",
+}
 
 PROP_MAPPINGS = {
     "Points": "player_points", "Rebounds": "player_rebounds", "Assists": "player_assists",

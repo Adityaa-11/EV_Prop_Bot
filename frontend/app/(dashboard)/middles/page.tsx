@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { RefreshCw, Loader2, AlertCircle, ArrowUp, ArrowDown, GitCompare, Database } from "lucide-react"
 import { getMiddles, type MiddlesResponse, type Middle } from "@/lib/api"
+import { SPORT_OPTIONS } from "@/lib/sports"
 
 export default function MiddlesPage() {
   const [data, setData] = useState<(MiddlesResponse & { cached?: boolean; cache_fresh?: boolean }) | null>(null)
@@ -72,11 +73,11 @@ export default function MiddlesPage() {
             <SelectValue placeholder="Sport" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Sports</SelectItem>
-            <SelectItem value="nba">NBA</SelectItem>
-            <SelectItem value="nfl">NFL</SelectItem>
-            <SelectItem value="mlb">MLB</SelectItem>
-            <SelectItem value="nhl">NHL</SelectItem>
+            {SPORT_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
       </div>

@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { RefreshCw, Loader2, AlertCircle, Search, Database } from "lucide-react"
 import { getProps, type PropsResponse, type ApiProp } from "@/lib/api"
+import { SPORT_OPTIONS } from "@/lib/sports"
 
 export default function PropsPage() {
   const [data, setData] = useState<(PropsResponse & { cached?: boolean; cache_fresh?: boolean }) | null>(null)
@@ -90,11 +91,11 @@ export default function PropsPage() {
             <SelectValue placeholder="Sport" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Sports</SelectItem>
-            <SelectItem value="nba">NBA</SelectItem>
-            <SelectItem value="nfl">NFL</SelectItem>
-            <SelectItem value="mlb">MLB</SelectItem>
-            <SelectItem value="nhl">NHL</SelectItem>
+            {SPORT_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
 

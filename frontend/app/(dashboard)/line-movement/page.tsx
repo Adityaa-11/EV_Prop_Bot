@@ -5,7 +5,9 @@ import { Activity, RefreshCw } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { getLineHistory, type LineObservation } from "@/lib/api"
+import { SPORT_OPTIONS } from "@/lib/sports"
 
 export default function LineMovementPage() {
   const [observations, setObservations] = useState<LineObservation[]>([])
@@ -40,17 +42,19 @@ export default function LineMovementPage() {
             Persisted candidate observations from paper scans
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {["mlb", "nba", "nfl", "nhl"].map((code) => (
-            <Button
-              key={code}
-              size="sm"
-              variant={sport === code ? "default" : "outline"}
-              onClick={() => setSport(code)}
-            >
-              {code.toUpperCase()}
-            </Button>
-          ))}
+        <div className="flex flex-wrap items-center gap-2">
+          <Select value={sport} onValueChange={setSport}>
+            <SelectTrigger className="w-40">
+              <SelectValue placeholder="Sport" />
+            </SelectTrigger>
+            <SelectContent>
+              {SPORT_OPTIONS.filter((option) => option.value !== "all").map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Button variant="outline" onClick={() => void refresh()}>
             <RefreshCw className="mr-2 h-4 w-4" />
             Refresh

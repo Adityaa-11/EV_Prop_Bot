@@ -118,7 +118,10 @@ PAPER_SCHEDULER_ENABLED = os.getenv("PAPER_SCHEDULER_ENABLED", "false").lower() 
 }
 PAPER_SPORTS = [
     sport.strip().lower()
-    for sport in os.getenv("PAPER_SPORTS", "mlb,nba,nfl,nhl").split(",")
+    for sport in os.getenv(
+        "PAPER_SPORTS",
+        "mlb,nba,nfl,nhl,wnba,ncaab,ncaaf,cfl,mls,epl,summer",
+    ).split(",")
     if sport.strip()
 ]
 paper_scheduler: PaperScheduler | None = None
@@ -302,26 +305,68 @@ app.add_middleware(
 # CONSTANTS
 # =============================================================================
 
-# PrizePicks League IDs
+# PrizePicks League IDs (direct API is often blocked; Odds API us_dfs is primary)
 PP_LEAGUE_IDS = {
-    "nba": 7, "nfl": 2, "mlb": 3, "nhl": 8, 
-    "ncaab": 10, "ncaaf": 4, "soccer": 17
+    "nba": 7,
+    "nfl": 2,
+    "mlb": 3,
+    "nhl": 8,
+    "ncaab": 10,
+    "ncaaf": 4,
+    "soccer": 17,
+    "mls": 17,
+    "epl": 17,
 }
 
-# Underdog Sport mappings
-UD_SPORTS = {"nba": "NBA", "nfl": "NFL", "mlb": "MLB", "nhl": "NHL"}
+# Underdog sport_id values observed on /beta/v6/over_under_lines
+UD_SPORTS = {
+    "nba": "NBA",
+    "nfl": "NFL",
+    "mlb": "MLB",
+    "nhl": "NHL",
+    "wnba": "WNBA",
+    "cfl": "CFL",
+    "ncaab": "CBB",
+    "ncaaf": "CFB",
+    # Underdog buckets all soccer under FIFA
+    "soccer": "FIFA",
+    "mls": "FIFA",
+    "epl": "FIFA",
+    # Summer / misc basketball board
+    "summer": "BASKETBALL",
+    "nba_summer": "BASKETBALL",
+}
 
-# Main sports for "all" queries
-MAIN_SPORTS = ["nba", "nfl", "mlb", "nhl"]
+# Sports included when callers pass sport=all (each scanned separately)
+MAIN_SPORTS = [
+    "mlb",
+    "nba",
+    "nfl",
+    "nhl",
+    "wnba",
+    "ncaab",
+    "ncaaf",
+    "cfl",
+    "mls",
+    "epl",
+    "summer",
+]
 
-# The Odds API sport keys
+# The Odds API sport keys used for DFS props + sharp books
 ODDS_API_SPORTS = {
     "nba": "basketball_nba",
     "nfl": "americanfootball_nfl",
     "mlb": "baseball_mlb",
     "nhl": "icehockey_nhl",
+    "wnba": "basketball_wnba",
     "ncaab": "basketball_ncaab",
     "ncaaf": "americanfootball_ncaaf",
+    "cfl": "americanfootball_cfl",
+    "mls": "soccer_usa_mls",
+    "soccer": "soccer_epl",
+    "epl": "soccer_epl",
+    "summer": "basketball_nba_summer_league",
+    "nba_summer": "basketball_nba_summer_league",
 }
 
 # Prop type mappings (platform stat -> Odds API market)
@@ -348,9 +393,17 @@ PROP_MAPPINGS = {
     "Rebounds + Assists": "player_rebounds_assists",
     "Blks+Stls": "player_blocks_steals",
     "Blocks + Steals": "player_blocks_steals",
-    "Fantasy Score": "player_points_rebounds_assists",  # Close approximation
+    "Fantasy Score": "player_fantasy_points",  # Prefer fantasy when market exists
+    "Fantasy Points": "player_fantasy_points",
+    "Double Doubles": "player_double_double",
+    "Double Double": "player_double_double",
+    "Rush + Rec TDs": "player_rush_reception_tds",
+    "INTs Thrown": "player_pass_interceptions",
+    "Shots Attempted": "player_shots",
+    "Shots on Target": "player_shots_on_target",
+    "Goals + Assists": "player_goals_assists",
     
-    # NFL
+    # Underdog stat names (lowercase variations)
     "Pass Yards": "player_pass_yds",
     "Passing Yards": "player_pass_yds",
     "Rush Yards": "player_rush_yds",
@@ -418,13 +471,44 @@ PROP_MAPPINGS = {
 
 # Ambiguous labels such as Points, Assists, Goals, and Shots must be resolved
 # in the context of a sport rather than by one global dictionary.
+_BASKETBALL_MARKET_MAP = {
+    "Points": "player_points",
+    "Rebounds": "player_rebounds",
+    "Assists": "player_assists",
+    "Shots": "player_shots",
+    "Fantasy Points": "player_fantasy_points",
+    "Fantasy Score": "player_fantasy_points",
+    "Double Doubles": "player_double_double",
+    "Double Double": "player_double_double",
+}
+_SOCCER_MARKET_MAP = {
+    "Goals": "player_goals_scored",
+    "Assists": "player_assists",
+    "Shots": "player_shots",
+    "Shots Attempted": "player_shots",
+    "Shots On Target": "player_shots_on_target",
+    "Shots on Target": "player_shots_on_target",
+    "Goals + Assists": "player_goals_assists",
+}
+_FOOTBALL_MARKET_MAP = {
+    "Pass Yards": "player_pass_yds",
+    "Passing Yards": "player_pass_yds",
+    "Rush Yards": "player_rush_yds",
+    "Rushing Yards": "player_rush_yds",
+    "Receiving Yards": "player_reception_yds",
+    "Rec Yards": "player_reception_yds",
+    "Pass TDs": "player_pass_tds",
+    "INTs Thrown": "player_pass_interceptions",
+    "Interceptions": "player_pass_interceptions",
+    "Rush + Rec TDs": "player_rush_reception_tds",
+}
+
 SPORT_MARKET_MAPPINGS: dict[str, dict[str, str]] = {
-    "nba": {
-        "Points": "player_points",
-        "Rebounds": "player_rebounds",
-        "Assists": "player_assists",
-        "Shots": "player_shots",
-    },
+    "nba": _BASKETBALL_MARKET_MAP,
+    "wnba": _BASKETBALL_MARKET_MAP,
+    "ncaab": _BASKETBALL_MARKET_MAP,
+    "summer": _BASKETBALL_MARKET_MAP,
+    "nba_summer": _BASKETBALL_MARKET_MAP,
     "nhl": {
         "Points": "player_points",
         "Assists": "player_assists",
@@ -432,12 +516,12 @@ SPORT_MARKET_MAPPINGS: dict[str, dict[str, str]] = {
         "Shots": "player_shots_on_goal",
         "Shots On Goal": "player_shots_on_goal",
     },
-    "soccer": {
-        "Goals": "player_goals_scored",
-        "Assists": "player_assists",
-        "Shots": "player_shots",
-        "Shots On Target": "player_shots_on_target",
-    },
+    "soccer": _SOCCER_MARKET_MAP,
+    "mls": _SOCCER_MARKET_MAP,
+    "epl": _SOCCER_MARKET_MAP,
+    "nfl": _FOOTBALL_MARKET_MAP,
+    "ncaaf": _FOOTBALL_MARKET_MAP,
+    "cfl": _FOOTBALL_MARKET_MAP,
 }
 
 
@@ -617,38 +701,65 @@ async def fetch_prizepicks_direct(session: aiohttp.ClientSession, sport: str) ->
 
 DFS_BOOKMAKER_KEYS = {
     "prizepicks": "prizepicks",
+    "underdog": "underdog",
     "betr": "betr_us_dfs",
 }
 
+_BASKETBALL_DFS_MARKETS = [
+    "player_points",
+    "player_rebounds",
+    "player_assists",
+    "player_threes",
+    "player_points_rebounds_assists",
+    "player_points_rebounds",
+    "player_points_assists",
+    "player_rebounds_assists",
+    "player_steals",
+    "player_blocks",
+    "player_blocks_steals",
+    "player_turnovers",
+    "player_double_double",
+    "player_fantasy_points",
+    "player_first_basket",
+]
+_FOOTBALL_DFS_MARKETS = [
+    "player_pass_yds",
+    "player_rush_yds",
+    "player_reception_yds",
+    "player_receptions",
+    "player_pass_tds",
+    "player_rush_tds",
+    "player_reception_tds",
+    "player_rush_reception_yds",
+    "player_rush_reception_tds",
+    "player_pass_interceptions",
+    "player_interceptions",
+    "player_completions",
+    "player_pass_attempts",
+    "player_anytime_td",
+    "player_sacks",
+]
+_SOCCER_DFS_MARKETS = [
+    "player_shots",
+    "player_shots_on_target",
+    "player_goals_scored",
+    "player_goals",
+    "player_assists",
+]
+
 DFS_MARKETS_BY_SPORT: dict[str, list[str]] = {
-    "nba": [
-        "player_points",
-        "player_rebounds",
-        "player_assists",
-        "player_threes",
-        "player_points_rebounds_assists",
-        "player_points_rebounds",
-        "player_points_assists",
-        "player_rebounds_assists",
-        "player_steals",
-        "player_blocks",
-        "player_blocks_steals",
-        "player_turnovers",
-        "player_double_double",
-        "player_first_basket",
-    ],
-    "nfl": [
+    "nba": _BASKETBALL_DFS_MARKETS,
+    "wnba": _BASKETBALL_DFS_MARKETS,
+    "ncaab": _BASKETBALL_DFS_MARKETS,
+    "summer": _BASKETBALL_DFS_MARKETS,
+    "nba_summer": _BASKETBALL_DFS_MARKETS,
+    "nfl": _FOOTBALL_DFS_MARKETS,
+    "ncaaf": _FOOTBALL_DFS_MARKETS,
+    "cfl": [
         "player_pass_yds",
         "player_rush_yds",
         "player_reception_yds",
-        "player_receptions",
         "player_pass_tds",
-        "player_rush_tds",
-        "player_reception_tds",
-        "player_rush_reception_yds",
-        "player_interceptions",
-        "player_completions",
-        "player_pass_attempts",
         "player_anytime_td",
     ],
     "mlb": [
@@ -671,12 +782,9 @@ DFS_MARKETS_BY_SPORT: dict[str, list[str]] = {
         "player_power_play_points",
         "goalie_saves",
     ],
-    "soccer": [
-        "player_shots",
-        "player_shots_on_target",
-        "player_goals_scored",
-        "player_assists",
-    ],
+    "soccer": _SOCCER_DFS_MARKETS,
+    "mls": _SOCCER_DFS_MARKETS,
+    "epl": _SOCCER_DFS_MARKETS,
 }
 
 def market_to_stat(market_key: str, sport: str) -> str:
@@ -938,8 +1046,14 @@ async def fetch_prizepicks(session: aiohttp.ClientSession, sport: str) -> list[P
 
 async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Prop]:
     """Fetch props from Underdog Fantasy API - TESTED AND WORKING."""
-    # Underdog uses sport_id as a string like "NBA", "NFL", etc.
-    target_sport = sport.upper()
+    sport_l = sport.lower()
+    target_sport = UD_SPORTS.get(sport_l)
+    if not target_sport:
+        print(f"[Underdog] No sport mapping for {sport}")
+        return []
+    # Keep the caller's sport key on props so Odds API matching stays consistent
+    # (e.g. mls maps to Underdog FIFA but still tags props as MLS).
+    prop_sport = sport_l.upper()
     
     url = "https://api.underdogfantasy.com/beta/v6/over_under_lines"
     headers = {
@@ -999,7 +1113,7 @@ async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Pro
                     player = players.get(player_id, {})
                     
                     # Get stat type from appearance_stat
-                    stat_type = app_stat.get("display_stat") or app_stat.get("stat") or ""
+                    stat_type = (app_stat.get("display_stat") or app_stat.get("stat") or "").strip()
                     
                     # Get line value - it's a STRING in the API!
                     stat_value = line.get("stat_value")
@@ -1016,7 +1130,7 @@ async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Pro
                                 id=f"ud_{line.get('id', '')}",
                                 player_name=name,
                                 team=team,
-                                sport=target_sport,
+                                sport=prop_sport,
                                 stat_type=stat_type,
                                 platform="underdog",
                                 line=float(stat_value),  # Convert string to float
@@ -1026,7 +1140,7 @@ async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Pro
                     # Skip this line if there's an error parsing it
                     continue
             
-            print(f"[Underdog] Returning {len(props)} props for {target_sport}")
+            print(f"[Underdog] Returning {len(props)} props for {prop_sport} (ud={target_sport})")
             return props
     except Exception as e:
         print(f"[Underdog] Error: {e}")
@@ -1161,10 +1275,7 @@ SHARP_BOOKS = [
 
 # Market priority for EV (fetch these first to maximize matches)
 MARKET_PRIORITY_BY_SPORT = {
-    "nba": DFS_MARKETS_BY_SPORT["nba"],
-    "nfl": DFS_MARKETS_BY_SPORT["nfl"],
-    "mlb": DFS_MARKETS_BY_SPORT["mlb"],
-    "nhl": DFS_MARKETS_BY_SPORT["nhl"],
+    sport: markets for sport, markets in DFS_MARKETS_BY_SPORT.items()
 }
 
 # Reduce calls to keep EV endpoint responsive
@@ -1499,6 +1610,25 @@ async def root():
     return {"message": "EV Dashboard API", "version": "1.0.0"}
 
 
+@app.get("/api/sports")
+async def list_sports():
+    """Return sports supported for DFS + sharp matching."""
+    return {
+        "sports": [
+            {
+                "code": sport,
+                "odds_api": ODDS_API_SPORTS.get(sport),
+                "underdog": UD_SPORTS.get(sport),
+                "dfs_markets": len(DFS_MARKETS_BY_SPORT.get(sport, [])),
+                "in_all": sport in MAIN_SPORTS,
+            }
+            for sport in sorted(set(MAIN_SPORTS) | set(ODDS_API_SPORTS) | set(UD_SPORTS))
+        ],
+        "main": MAIN_SPORTS,
+        "paper_default": PAPER_SPORTS,
+    }
+
+
 @app.get("/api/hermes/candidates", dependencies=[Depends(require_hermes_key)])
 async def hermes_candidates(
     sport: str = Query("mlb"),
@@ -1557,10 +1687,10 @@ async def hermes_scan(
 ):
     """Run one explicit, quota-consuming scan for Hermes."""
     normalized_sport = sport.lower()
-    if normalized_sport not in MAIN_SPORTS:
+    if normalized_sport not in ODDS_API_SPORTS:
         raise HTTPException(
             status_code=422,
-            detail=f"sport must be one of {MAIN_SPORTS}; scan sports separately",
+            detail=f"sport must be one of {sorted(ODDS_API_SPORTS)}; scan sports separately",
         )
     normalized_platform = platform.lower()
     if normalized_platform not in {"all", "prizepicks", "underdog"}:
@@ -1709,8 +1839,11 @@ async def run_paper_settlement() -> dict[str, Any]:
 async def run_paper_tick(sport: str) -> dict[str, Any]:
     """Quota-gated paper scan used by Hermes and the Railway scheduler."""
     normalized_sport = sport.lower()
-    if normalized_sport not in MAIN_SPORTS:
-        raise HTTPException(status_code=422, detail=f"sport must be one of {MAIN_SPORTS}")
+    if normalized_sport not in ODDS_API_SPORTS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"sport must be one of {sorted(ODDS_API_SPORTS)}",
+        )
 
     async with refresh_locks[f"paper_tick:{normalized_sport}"]:
         async with aiohttp.ClientSession() as session:

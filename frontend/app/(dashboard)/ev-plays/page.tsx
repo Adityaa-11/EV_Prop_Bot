@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ArrowUp, ArrowDown, RefreshCw, Loader2, AlertCircle, Database } from "lucide-react"
 import { getEVPlays, type EVPlay, type EVResponse } from "@/lib/api"
+import { SPORT_OPTIONS } from "@/lib/sports"
 
 export default function EVPlaysPage() {
   const [data, setData] = useState<(EVResponse & { cached?: boolean; cache_fresh?: boolean }) | null>(null)
@@ -77,11 +78,11 @@ export default function EVPlaysPage() {
             <SelectValue placeholder="Sport" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Sports</SelectItem>
-            <SelectItem value="nba">NBA</SelectItem>
-            <SelectItem value="nfl">NFL</SelectItem>
-            <SelectItem value="mlb">MLB</SelectItem>
-            <SelectItem value="nhl">NHL</SelectItem>
+            {SPORT_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
 
