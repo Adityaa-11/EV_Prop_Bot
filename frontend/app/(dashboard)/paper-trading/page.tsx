@@ -91,7 +91,7 @@ export default function PaperTradingPage() {
         <Card className="mb-6 border-amber-500/50 bg-amber-500/10 p-4">
           <p className="font-semibold text-amber-600 dark:text-amber-400">Capacity reached</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            {data.capacity.open_entries}/{data.capacity.max_open_entries} open entries — new paper slips are blocked
+            {data?.capacity.open_entries}/{data?.capacity.max_open_entries} open entries — new paper slips are blocked
             until entries settle or stale non-MLB slips auto-void.
           </p>
         </Card>
@@ -101,7 +101,7 @@ export default function PaperTradingPage() {
         <Card className="mb-6 border-orange-500/50 bg-orange-500/10 p-4">
           <p className="font-semibold text-orange-600 dark:text-orange-400">Settlement backlog</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            {data.settlement_backlog} open entries are waiting on settlement. MLB settles automatically; other sports
+            {data?.settlement_backlog} open entries are waiting on settlement. MLB settles automatically; other sports
             void after the stale window.
           </p>
         </Card>
@@ -111,7 +111,7 @@ export default function PaperTradingPage() {
         <Card className="mb-6 border-destructive/50 bg-destructive/10 p-4">
           <p className="font-semibold text-destructive">Last scan blocked</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            {data.automation.message || "Risk or scan cap prevented new entries."}
+            {data?.automation.message || "Risk or scan cap prevented new entries."}
           </p>
         </Card>
       )}

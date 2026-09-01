@@ -113,7 +113,7 @@ export interface PaperEntry {
   platform: "prizepicks" | "underdog"
   sport: string
   status: "open" | "settled"
-  execution_mode: "paper"
+  execution_mode: "paper" | "live"
   tier: "excellent" | "strong"
   stake: number
   expected_roi: number
@@ -187,7 +187,6 @@ export interface PaperResponse {
 }
 
 export interface LiveEntry extends PaperEntry {
-  execution_mode?: string
   execution_status?: string
   execution_claimed_at?: string | null
   execution_completed_at?: string | null
