@@ -187,7 +187,14 @@ class StrongNearLockTests(unittest.TestCase):
         result = build_paper_entries(
             plays,
             stability_for=lambda _: {"stable": True},
-            policy=PaperPolicy(),
+            policy=PaperPolicy(
+                min_leg_win=56,
+                min_leg_books=2,
+                max_leg_dispersion=5,
+                require_line_stability=True,
+                excellent_roi=10,
+                strong_roi=5,
+            ),
             daily_staked=0,
             open_entries=0,
             now=now,

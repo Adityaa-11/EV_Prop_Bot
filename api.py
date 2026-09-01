@@ -112,6 +112,27 @@ PAPER_POLICY = PaperPolicy(
     daily_stake_cap=float(os.getenv("PAPER_DAILY_STAKE_CAP", "30")),
     daily_loss_stop=float(os.getenv("PAPER_DAILY_LOSS_STOP", "30")),
     max_open_entries=int(os.getenv("PAPER_MAX_OPEN_ENTRIES", "4")),
+    min_leg_win=float(os.getenv("PAPER_MIN_LEG_WIN", "52")),
+    min_leg_books=int(os.getenv("PAPER_MIN_LEG_BOOKS", "2")),
+    max_leg_dispersion=float(os.getenv("PAPER_MAX_LEG_DISPERSION", "8")),
+    require_line_stability=os.getenv("PAPER_REQUIRE_LINE_STABILITY", "false").lower()
+    in {"1", "true", "yes"},
+    excellent_roi=float(os.getenv("PAPER_EXCELLENT_ROI", "-25")),
+    strong_roi=float(os.getenv("PAPER_STRONG_ROI", "-30")),
+)
+LIVE_ENTRY_POLICY = PaperPolicy(
+    starting_bankroll=PAPER_POLICY.starting_bankroll,
+    stake=float(os.getenv("LIVE_STAKE", os.getenv("PAPER_STAKE", "10"))),
+    daily_stake_cap=PAPER_POLICY.daily_stake_cap,
+    daily_loss_stop=PAPER_POLICY.daily_loss_stop,
+    max_open_entries=int(os.getenv("LIVE_MAX_OPEN_ENTRIES", "1")),
+    min_leg_win=float(os.getenv("LIVE_MIN_LEG_WIN", "57")),
+    min_leg_books=int(os.getenv("LIVE_MIN_LEG_BOOKS", "3")),
+    max_leg_dispersion=float(os.getenv("LIVE_MAX_LEG_DISPERSION", "3")),
+    require_line_stability=os.getenv("LIVE_REQUIRE_LINE_STABILITY", "true").lower()
+    in {"1", "true", "yes"},
+    excellent_roi=float(os.getenv("LIVE_EXCELLENT_ROI", "10")),
+    strong_roi=float(os.getenv("LIVE_STRONG_ROI", "5")),
 )
 PAPER_DAILY_SCAN_CAP = int(os.getenv("PAPER_DAILY_SCAN_CAP", "24"))
 PAPER_SCHEDULER_ENABLED = os.getenv("PAPER_SCHEDULER_ENABLED", "false").lower() in {
@@ -1852,6 +1873,10 @@ def _effective_execution_mode() -> str:
     return "paper"
 
 
+def _entry_policy_for_mode(execution_mode: str) -> PaperPolicy:
+    return LIVE_ENTRY_POLICY if execution_mode == "live" else PAPER_POLICY
+
+
 def _prepare_created_entry(entry: dict[str, Any]) -> dict[str, Any]:
     prepared = dict(entry)
     if _effective_execution_mode() == "live":
@@ -1976,24 +2001,25 @@ async def run_paper_tick(sport: str) -> dict[str, Any]:
             sport=normalized_sport,
             platform="all",
             min_ev=0,
-            min_win=54,
-            min_books=2,
+            min_win=_entry_policy_for_mode(_effective_execution_mode()).min_leg_win,
+            min_books=_entry_policy_for_mode(_effective_execution_mode()).min_leg_books,
         )
         plays = scan.get("plays", [])
         store.record_candidate_observations(plays)
         updated_closing_lines = store.update_open_entry_closing_lines(plays)
         store.freeze_closing_lines_past_lock()
         summary = store.paper_summary(PAPER_POLICY.starting_bankroll)
+        execution_mode = _effective_execution_mode()
+        entry_policy = _entry_policy_for_mode(execution_mode)
         build = build_paper_entries(
             plays,
             stability_for=store.candidate_stability,
-            policy=PAPER_POLICY,
+            policy=entry_policy,
             daily_staked=summary["daily_staked"],
             daily_profit=summary["daily_profit"],
             open_entries=summary["open_entries"],
         )
         created_entries = []
-        execution_mode = _effective_execution_mode()
         for entry in build["entries"]:
             prepared = _prepare_created_entry(entry)
             if execution_mode == "live" and LIVE_EXCELLENT_ONLY and prepared.get("tier") != "excellent":

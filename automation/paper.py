@@ -16,8 +16,12 @@ class PaperPolicy:
     daily_stake_cap: float = 30.0
     daily_loss_stop: float = 30.0
     max_open_entries: int = 4
-    excellent_roi: float = 10.0
-    strong_roi: float = 5.0
+    min_leg_win: float = 52.0
+    min_leg_books: int = 2
+    max_leg_dispersion: float = 8.0
+    require_line_stability: bool = False
+    excellent_roi: float = -25.0
+    strong_roi: float = -30.0
     strong_lock_minutes: int = 30
 
 
@@ -44,15 +48,17 @@ def _entry_roi(probabilities: list[float], payout_multiplier: float) -> float:
     return (win_probability * payout_multiplier - 1) * 100
 
 
-def _leg_tier(play: dict[str, Any]) -> str | None:
+def _leg_tier(play: dict[str, Any], policy: PaperPolicy) -> str | None:
     consensus = play.get("consensus", {})
     probability = float(play.get("win_probability", 0))
     books = int(consensus.get("book_count", 0))
     dispersion = float(consensus.get("dispersion", 100))
-    if probability >= 57 and books >= 3 and dispersion <= 3:
-        return "excellent"
-    if probability >= 56 and books >= 2 and dispersion <= 5:
-        return "strong"
+    if (
+        probability >= policy.min_leg_win
+        and books >= policy.min_leg_books
+        and dispersion <= policy.max_leg_dispersion
+    ):
+        return "playable"
     return None
 
 
@@ -93,21 +99,22 @@ def build_paper_entries(
     if available_slots == 0:
         return {"entries": [], "watch_count": len(plays), "reason": "risk_capacity_reached"}
 
-    stable_plays = []
+    eligible_plays = []
     for play in plays:
         candidate_id = play.get("candidate_id")
-        if not candidate_id or _leg_tier(play) is None:
+        if not candidate_id or _leg_tier(play, policy) is None:
             continue
-        stability = stability_for(candidate_id)
-        if not stability.get("stable"):
-            continue
-        stable_plays.append(play)
+        if policy.require_line_stability:
+            stability = stability_for(candidate_id)
+            if not stability.get("stable"):
+                continue
+        eligible_plays.append(play)
 
     combinations = []
     for platform, payout_table in PAYOUTS.items():
         platform_plays = [
             play
-            for play in stable_plays
+            for play in eligible_plays
             if play.get("prop", {}).get("platform") == platform
         ][:30]
         multiplier = payout_table[2]
@@ -128,8 +135,10 @@ def build_paper_entries(
             if minutes_to_lock <= 5:
                 continue
 
-            all_excellent = all(_leg_tier(leg) == "excellent" for leg in legs)
-            if all_excellent and expected_roi >= policy.excellent_roi:
+            all_playable = all(_leg_tier(leg, policy) == "playable" for leg in legs)
+            if not all_playable:
+                continue
+            if expected_roi >= policy.excellent_roi:
                 tier = "excellent"
             elif (
                 expected_roi >= policy.strong_roi
