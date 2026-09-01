@@ -137,6 +137,12 @@ class PipelineStore:
             "delivery_attempts": "ALTER TABLE paper_entries ADD COLUMN delivery_attempts INTEGER NOT NULL DEFAULT 0",
             "delivery_error": "ALTER TABLE paper_entries ADD COLUMN delivery_error TEXT",
             "delivery_updated_at": "ALTER TABLE paper_entries ADD COLUMN delivery_updated_at TEXT",
+            "execution_status": "ALTER TABLE paper_entries ADD COLUMN execution_status TEXT NOT NULL DEFAULT 'skipped'",
+            "execution_claimed_at": "ALTER TABLE paper_entries ADD COLUMN execution_claimed_at TEXT",
+            "execution_completed_at": "ALTER TABLE paper_entries ADD COLUMN execution_completed_at TEXT",
+            "external_ticket_id": "ALTER TABLE paper_entries ADD COLUMN external_ticket_id TEXT",
+            "execution_error": "ALTER TABLE paper_entries ADD COLUMN execution_error TEXT",
+            "execution_attempts": "ALTER TABLE paper_entries ADD COLUMN execution_attempts INTEGER NOT NULL DEFAULT 0",
         }
         for column, statement in alterations.items():
             if column not in columns:
@@ -392,27 +398,38 @@ class PipelineStore:
             "last_observed_at": rows[0]["observed_at"] if rows else None,
         }
 
-    def create_paper_entry(self, entry: dict[str, Any]) -> bool:
+    def create_paper_entry(
+        self,
+        entry: dict[str, Any],
+        *,
+        execution_mode: str = "paper",
+        execution_status: str | None = None,
+    ) -> bool:
+        mode = execution_mode.lower()
+        if execution_status is None:
+            execution_status = "pending" if mode == "live" else "skipped"
         with self._lock, self._connect() as connection:
             cursor = connection.execute(
                 """
                 INSERT OR IGNORE INTO paper_entries (
                     id, fingerprint, platform, sport, status, execution_mode,
                     tier, stake, expected_roi, potential_payout, lock_time,
-                    created_at, delivery_status, payload_json
-                ) VALUES (?, ?, ?, ?, 'open', 'paper', ?, ?, ?, ?, ?, ?, 'pending', ?)
+                    created_at, delivery_status, execution_status, payload_json
+                ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
                 """,
                 (
                     entry["id"],
                     entry["fingerprint"],
                     entry["platform"],
                     entry["sport"].lower(),
+                    mode,
                     entry["tier"],
                     entry["stake"],
                     entry["expected_roi"],
                     entry["potential_payout"],
                     entry.get("lock_time"),
                     entry["created_at"],
+                    execution_status,
                     json.dumps(entry, separators=(",", ":"), default=str),
                 ),
             )
@@ -426,7 +443,10 @@ class PipelineStore:
                 SELECT id, platform, sport, status, execution_mode, tier, stake,
                        expected_roi, potential_payout, lock_time, created_at,
                        settled_at, result, payout, profit, delivery_status,
-                       delivery_attempts, delivery_error, delivery_updated_at, payload_json
+                       delivery_attempts, delivery_error, delivery_updated_at,
+                       execution_status, execution_claimed_at, execution_completed_at,
+                       external_ticket_id, execution_error, execution_attempts,
+                       payload_json
                 FROM paper_entries
                 ORDER BY created_at DESC
                 LIMIT ?
@@ -457,6 +477,12 @@ class PipelineStore:
                     "delivery_attempts": row["delivery_attempts"],
                     "delivery_error": row["delivery_error"],
                     "delivery_updated_at": row["delivery_updated_at"],
+                    "execution_status": row["execution_status"],
+                    "execution_claimed_at": row["execution_claimed_at"],
+                    "execution_completed_at": row["execution_completed_at"],
+                    "external_ticket_id": row["external_ticket_id"],
+                    "execution_error": row["execution_error"],
+                    "execution_attempts": row["execution_attempts"],
                 }
             )
             entries.append(payload)
@@ -588,6 +614,116 @@ class PipelineStore:
 
     def list_open_paper_entries(self) -> list[dict[str, Any]]:
         return [entry for entry in self.list_paper_entries(500) if entry.get("status") == "open"]
+
+    def list_pending_execution_entries(self, limit: int = 20) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(limit, 50))
+        entries = self.list_paper_entries(safe_limit * 3)
+        return [
+            entry
+            for entry in entries
+            if entry.get("execution_mode") == "live"
+            and entry.get("execution_status") == "pending"
+            and entry.get("status") == "open"
+        ][:safe_limit]
+
+    def claim_execution_entry(self, entry_id: str, *, worker_id: str) -> dict[str, Any] | None:
+        claimed_at = _utc_now()
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, payload_json, execution_status, execution_attempts
+                FROM paper_entries
+                WHERE id = ? AND status = 'open' AND execution_mode = 'live'
+                """,
+                (entry_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            status = row["execution_status"]
+            if status == "pending":
+                connection.execute(
+                    """
+                    UPDATE paper_entries
+                    SET execution_status = 'claimed',
+                        execution_claimed_at = ?,
+                        execution_attempts = execution_attempts + 1
+                    WHERE id = ? AND execution_status = 'pending'
+                    """,
+                    (claimed_at, entry_id),
+                )
+            elif status == "claimed":
+                pass
+            else:
+                return None
+            payload_row = connection.execute(
+                "SELECT payload_json FROM paper_entries WHERE id = ?",
+                (entry_id,),
+            ).fetchone()
+            if payload_row is None:
+                return None
+            payload = json.loads(payload_row["payload_json"])
+            payload["execution_worker"] = worker_id
+            payload["execution_claimed_at"] = claimed_at
+            return payload
+
+    def complete_execution_entry(
+        self,
+        entry_id: str,
+        *,
+        status: str,
+        external_ticket_id: str | None = None,
+        error: str | None = None,
+    ) -> bool:
+        completed_at = _utc_now()
+        normalized = status.lower()
+        if normalized not in {"submitted", "failed", "skipped"}:
+            return False
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT payload_json, execution_status
+                FROM paper_entries
+                WHERE id = ? AND status = 'open' AND execution_mode = 'live'
+                """,
+                (entry_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            if row["execution_status"] not in {"pending", "claimed", "submitted", "failed"}:
+                return False
+            payload = json.loads(row["payload_json"])
+            if external_ticket_id:
+                payload["external_ticket_id"] = external_ticket_id
+            if error:
+                payload["execution_error"] = error[:500]
+            connection.execute(
+                """
+                UPDATE paper_entries
+                SET execution_status = ?,
+                    execution_completed_at = ?,
+                    external_ticket_id = COALESCE(?, external_ticket_id),
+                    execution_error = ?,
+                    payload_json = ?
+                WHERE id = ?
+                """,
+                (
+                    normalized,
+                    completed_at,
+                    external_ticket_id,
+                    error[:500] if error else None,
+                    json.dumps(payload, separators=(",", ":"), default=str),
+                    entry_id,
+                ),
+            )
+            return True
+
+    def list_entries_by_mode(self, execution_mode: str, limit: int = 100) -> list[dict[str, Any]]:
+        mode = execution_mode.lower()
+        return [
+            entry
+            for entry in self.list_paper_entries(limit)
+            if entry.get("execution_mode") == mode
+        ]
 
     def list_pending_delivery(self, limit: int = 50) -> list[dict[str, Any]]:
         entries = self.list_paper_entries(limit)

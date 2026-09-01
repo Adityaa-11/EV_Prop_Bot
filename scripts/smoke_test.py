@@ -88,6 +88,21 @@ def main() -> int:
     if paper_status != 200:
         return 1
 
+    live_status, live = request_json(arguments.base_url, "/api/live")
+    print(
+        json.dumps(
+            {
+                "check": "live",
+                "http": live_status,
+                "enabled": live.get("enabled"),
+                "shadow_mode": live.get("shadow_mode"),
+                "pending_execution": live.get("pending_execution"),
+            }
+        )
+    )
+    if live_status != 200:
+        return 1
+
     if arguments.paper_only:
         return 0
 

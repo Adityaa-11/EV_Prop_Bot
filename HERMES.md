@@ -2,12 +2,80 @@
 
 Hermes orchestrates this project; it does not calculate betting eligibility.
 
-- The FastAPI backend is the only authority for EV, quality tiers, bankroll limits, paper-slip construction, settlement, and CLV.
-- Call `POST /api/hermes/paper/tick?sport=<sport>` with `X-Hermes-Key`. Do not call paid upstream APIs directly.
+## Brain vs hands
+
+| Component | Location | Responsibility |
+|-----------|----------|----------------|
+| FastAPI backend | Railway | EV, tiers, bankroll, approve/reject, ledger, settlement |
+| Hermes + Playwright | Mac Mini | Poll approved live entries, submit on PP/UD, report result |
+| Grok (Hermes model) | Mac Mini | Navigate UI, handle errors, format alerts — **not** EV math |
+
+## Paper mode (default)
+
+- Call `POST /api/hermes/paper/tick?sport=<sport>` with `X-Hermes-Key` only if Railway scheduler is off.
 - A `waiting` or `watching` response is successful. Never lower thresholds or force a daily play.
 - New slips in `created_entries` are simulations. Label every Discord message `PAPER — NO REAL WAGER`.
 - Read portfolio state from `GET /api/paper`.
-- Never navigate PrizePicks or Underdog, submit an entry, expose credentials, or reinterpret a rejected risk decision.
-- Real-money execution is outside the current implementation.
-- Always-on scanning belongs to Railway (`PAPER_SCHEDULER_ENABLED`). Local Hermes is optional.
-- Kill switch: set `PAPER_SCHEDULER_ENABLED=false` on Railway and redeploy/restart.
+- Skill: `fetch-ev-candidates` — **must not** open PrizePicks or Underdog.
+
+## Live mode (when enabled)
+
+Env on Railway:
+
+```bash
+EXECUTION_MODE=live
+LIVE_EXECUTION_ENABLED=true
+EXECUTION_SHADOW_MODE=true   # start true — navigate only, no submit
+LIVE_STAKE=5
+LIVE_EXCELLENT_ONLY=true
+```
+
+Hermes executor loop (Mac Mini):
+
+1. `GET /api/hermes/execution/pending` with `X-Hermes-Key`
+2. `POST /api/hermes/execution/{id}/claim` — idempotent lease
+3. Run Playwright skill `place-dfs-entry` with **exact** legs/stake from payload
+4. `POST /api/hermes/execution/{id}/result` — `{status: submitted|failed|skipped, external_ticket_id?, error?}`
+5. `POST /api/hermes/execution/heartbeat` every few minutes
+
+Skill: `place-dfs-entry` — may navigate PP/UD; **must not** change legs, stake, or EV logic.
+
+Kill switches:
+
+- `LIVE_EXECUTION_ENABLED=false` on Railway — stops new live queue entries
+- `PAPER_SCHEDULER_ENABLED=false` — stops scanning
+- `EXECUTION_SHADOW_MODE=true` — Hermes must not click Submit
+
+## Mac Mini setup
+
+```bash
+export EV_BACKEND_URL=https://web-production-f7afc.up.railway.app
+export HERMES_API_KEY=your_key
+export PP_BROWSER_PROFILE=$HOME/.ev-bot/prizepicks-profile
+export UD_BROWSER_PROFILE=$HOME/.ev-bot/underdog-profile
+
+# Install Playwright once
+npx playwright install chromium
+
+# Copy skills to Hermes
+cp -R hermes/skills/* ~/.hermes/skills/
+```
+
+Schedule (launchd or cron every 2–5 min):
+
+```bash
+python hermes/skills/place-dfs-entry/scripts/run_executor.py
+```
+
+Credentials stay in env or browser profile — never commit to git.
+
+## Dashboard
+
+- Paper: `GET /api/paper` → Vercel `/paper-trading`
+- Live: `GET /api/live`
+
+## Rules
+
+- Never recalculate EV, combine legs differently, or override a rejected risk decision.
+- Never print `HERMES_API_KEY` or platform passwords in logs or Discord.
+- Real execution only after paper validation and shadow mode pass.

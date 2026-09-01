@@ -34,7 +34,10 @@ from automation import (
     PaperScheduler,
     build_paper_entries,
     deliver_paper_entry,
+    deliver_live_status,
+    deliver_ops_alert,
     settle_mlb_entries,
+    void_stale_open_entries,
 )
 
 load_dotenv()
@@ -124,6 +127,24 @@ PAPER_SPORTS = [
     ).split(",")
     if sport.strip()
 ]
+EXECUTION_MODE = os.getenv("EXECUTION_MODE", "paper").lower()
+LIVE_EXECUTION_ENABLED = os.getenv("LIVE_EXECUTION_ENABLED", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+EXECUTION_SHADOW_MODE = os.getenv("EXECUTION_SHADOW_MODE", "true").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+LIVE_EXCELLENT_ONLY = os.getenv("LIVE_EXCELLENT_ONLY", "true").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+LIVE_STAKE = float(os.getenv("LIVE_STAKE", os.getenv("PAPER_STAKE", "10")))
+EXECUTION_WORKER_ID = os.getenv("EXECUTION_WORKER_ID", "hermes-mac-mini")
 paper_scheduler: PaperScheduler | None = None
 
 
@@ -623,6 +644,12 @@ class EntryEVRequest(BaseModel):
 class PaperSettlement(BaseModel):
     result: str
     payout: float
+
+
+class ExecutionResult(BaseModel):
+    status: str
+    external_ticket_id: Optional[str] = None
+    error: Optional[str] = None
 
 
 class MiddleOpportunity(BaseModel):
@@ -1808,6 +1835,36 @@ def _paper_scheduler_status() -> dict[str, Any]:
     return paper_scheduler.status()
 
 
+async def _maybe_ops_alert(message_key: str, title: str, body: str) -> None:
+    today = datetime.now(timezone.utc).date().isoformat()
+    prior = store.get_state(f"ops_alert:{message_key}") or {}
+    if prior.get("date") == today:
+        return
+    async with aiohttp.ClientSession() as session:
+        await deliver_ops_alert(session, title, body)
+    store.set_state(f"ops_alert:{message_key}", {"date": today, "title": title})
+
+
+def _effective_execution_mode() -> str:
+    if EXECUTION_MODE == "live" and LIVE_EXECUTION_ENABLED:
+        return "live"
+    return "paper"
+
+
+def _prepare_created_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    prepared = dict(entry)
+    if _effective_execution_mode() == "live":
+        if LIVE_EXCELLENT_ONLY and prepared.get("tier") != "excellent":
+            return prepared
+        prepared["stake"] = LIVE_STAKE
+        prepared["potential_payout"] = round(LIVE_STAKE * 3, 2)
+        prepared["execution_shadow"] = EXECUTION_SHADOW_MODE
+        prepared["execution_mode"] = "live"
+    else:
+        prepared["execution_mode"] = "paper"
+    return prepared
+
+
 async def run_paper_delivery() -> dict[str, Any]:
     pending = store.list_pending_delivery()
     sent = 0
@@ -1830,10 +1887,23 @@ async def run_paper_delivery() -> dict[str, Any]:
 async def run_paper_settlement() -> dict[str, Any]:
     store.freeze_closing_lines_past_lock()
     open_entries = store.list_open_paper_entries()
-    async with aiohttp.ClientSession() as session:
-        actions = await settle_mlb_entries(session, open_entries)
+    void_actions = void_stale_open_entries(open_entries)
     settled = 0
+    voided = 0
     pending = 0
+    for action in void_actions:
+        if store.apply_settlement(
+            action["entry_id"],
+            result=action["result"],
+            payout=action["payout"],
+            provenance=action.get("provenance"),
+        ):
+            voided += 1
+            settled += 1
+
+    remaining_open = store.list_open_paper_entries()
+    async with aiohttp.ClientSession() as session:
+        actions = await settle_mlb_entries(session, remaining_open)
     for action in actions:
         if action.get("status") == "settled":
             if store.apply_settlement(
@@ -1846,7 +1916,12 @@ async def run_paper_settlement() -> dict[str, Any]:
                 settled += 1
         else:
             pending += 1
-    return {"settled": settled, "pending": pending, "actions": len(actions)}
+    return {
+        "settled": settled,
+        "voided": voided,
+        "pending": pending,
+        "actions": len(void_actions) + len(actions),
+    }
 
 
 async def run_paper_tick(sport: str) -> dict[str, Any]:
@@ -1888,6 +1963,12 @@ async def run_paper_tick(sport: str) -> dict[str, Any]:
                 "checked_at": datetime.now(timezone.utc).isoformat(),
             }
             store.set_state("paper_latest", latest)
+            await _maybe_ops_alert(
+                "daily_scan_cap",
+                "Daily scan cap reached",
+                f"Used {scans_today}/{PAPER_DAILY_SCAN_CAP} paid scans today. "
+                "No further quota-consuming scans until UTC midnight.",
+            )
             return {**latest, "created_entries": [], "created_count": 0}
 
         scan = await hermes_scan(
@@ -1911,12 +1992,37 @@ async def run_paper_tick(sport: str) -> dict[str, Any]:
             open_entries=summary["open_entries"],
         )
         created_entries = []
+        execution_mode = _effective_execution_mode()
         for entry in build["entries"]:
-            if store.create_paper_entry(entry):
-                created_entries.append(entry)
+            prepared = _prepare_created_entry(entry)
+            if execution_mode == "live" and LIVE_EXCELLENT_ONLY and prepared.get("tier") != "excellent":
+                continue
+            if store.create_paper_entry(
+                prepared,
+                execution_mode=execution_mode,
+                execution_status="pending" if execution_mode == "live" else "skipped",
+            ):
+                created_entries.append(prepared)
+
+        if build.get("reason") == "risk_capacity_reached":
+            await _maybe_ops_alert(
+                "risk_capacity",
+                "Paper capacity full",
+                f"{summary['open_entries']}/{PAPER_POLICY.max_open_entries} open entries. "
+                "Clear stale entries or wait for settlement before new slips.",
+            )
 
         if created_entries:
             await run_paper_delivery()
+            if execution_mode == "live":
+                async with aiohttp.ClientSession() as session:
+                    for entry in created_entries:
+                        await deliver_live_status(
+                            session,
+                            entry,
+                            status_label="LIVE — SUBMITTING",
+                            extra="Queued for Hermes Playwright executor.",
+                        )
 
         checked_at = datetime.now(timezone.utc).isoformat()
         store.set_state(
@@ -1970,6 +2076,18 @@ async def paper_dashboard(limit: int = Query(100, ge=1, le=500)):
         },
         "delivery_failures": store.delivery_failure_count(),
         "settlement_backlog": store.settlement_backlog_count(),
+        "capacity": {
+            "open_entries": store.paper_summary(PAPER_POLICY.starting_bankroll)["open_entries"],
+            "max_open_entries": PAPER_POLICY.max_open_entries,
+            "blocked": store.paper_summary(PAPER_POLICY.starting_bankroll)["open_entries"]
+            >= PAPER_POLICY.max_open_entries,
+        },
+        "execution": {
+            "mode": EXECUTION_MODE,
+            "live_enabled": LIVE_EXECUTION_ENABLED,
+            "shadow_mode": EXECUTION_SHADOW_MODE,
+            "live_stake": LIVE_STAKE,
+        },
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -2024,6 +2142,115 @@ async def hermes_settle_paper_entry(entry_id: str, settlement: PaperSettlement):
     if not store.apply_settlement(entry_id, result=result, payout=settlement.payout):
         raise HTTPException(status_code=404, detail="Open paper entry not found")
     return {"success": True, "entry_id": entry_id, "result": result}
+
+
+@app.get("/api/live")
+async def live_dashboard(limit: int = Query(100, ge=1, le=500)):
+    """Public read-only live execution portfolio."""
+    live_entries = store.list_entries_by_mode("live", limit)
+    open_live = [entry for entry in live_entries if entry.get("status") == "open"]
+    pending_exec = store.list_pending_execution_entries(limit)
+    return {
+        "mode": "live",
+        "enabled": LIVE_EXECUTION_ENABLED,
+        "shadow_mode": EXECUTION_SHADOW_MODE,
+        "stake": LIVE_STAKE,
+        "summary": store.paper_summary(PAPER_POLICY.starting_bankroll),
+        "entries": live_entries,
+        "open_live_entries": len(open_live),
+        "pending_execution": len(pending_exec),
+        "executor_heartbeat": store.get_state("hermes_executor_heartbeat"),
+        "settlement_backlog": store.settlement_backlog_count(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/api/hermes/execution/pending", dependencies=[Depends(require_hermes_key)])
+async def hermes_execution_pending(limit: int = Query(10, ge=1, le=20)):
+    if not LIVE_EXECUTION_ENABLED:
+        return {"enabled": False, "shadow_mode": EXECUTION_SHADOW_MODE, "entries": []}
+    entries = store.list_pending_execution_entries(limit)
+    return {
+        "enabled": True,
+        "shadow_mode": EXECUTION_SHADOW_MODE,
+        "worker_id": EXECUTION_WORKER_ID,
+        "entries": entries,
+    }
+
+
+@app.post("/api/hermes/execution/{entry_id}/claim", dependencies=[Depends(require_hermes_key)])
+async def hermes_execution_claim(entry_id: str):
+    if not LIVE_EXECUTION_ENABLED:
+        raise HTTPException(status_code=403, detail="Live execution is disabled")
+    payload = store.claim_execution_entry(entry_id, worker_id=EXECUTION_WORKER_ID)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Pending live entry not found")
+    store.set_state(
+        "hermes_executor_heartbeat",
+        {
+            "worker_id": EXECUTION_WORKER_ID,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "last_action": "claim",
+            "entry_id": entry_id,
+        },
+    )
+    return {
+        "entry": payload,
+        "shadow_mode": EXECUTION_SHADOW_MODE,
+        "worker_id": EXECUTION_WORKER_ID,
+    }
+
+
+@app.post("/api/hermes/execution/{entry_id}/result", dependencies=[Depends(require_hermes_key)])
+async def hermes_execution_result(entry_id: str, result: ExecutionResult):
+    if not LIVE_EXECUTION_ENABLED:
+        raise HTTPException(status_code=403, detail="Live execution is disabled")
+    allowed = {"submitted", "failed", "skipped"}
+    status = result.status.lower()
+    if status not in allowed:
+        raise HTTPException(status_code=422, detail=f"status must be one of {sorted(allowed)}")
+    if not store.complete_execution_entry(
+        entry_id,
+        status=status,
+        external_ticket_id=result.external_ticket_id,
+        error=result.error,
+    ):
+        raise HTTPException(status_code=404, detail="Claimed live entry not found")
+    entry = next(
+        (item for item in store.list_paper_entries(200) if item.get("id") == entry_id),
+        {"id": entry_id},
+    )
+    label = "LIVE — PLACED" if status == "submitted" else "LIVE — FAILED"
+    extra = ""
+    if result.external_ticket_id:
+        extra = f"Ticket: `{result.external_ticket_id}`"
+    if result.error:
+        extra = f"{extra}\nError: {result.error[:300]}".strip()
+    async with aiohttp.ClientSession() as session:
+        await deliver_live_status(session, entry, status_label=label, extra=extra)
+    store.set_state(
+        "hermes_executor_heartbeat",
+        {
+            "worker_id": EXECUTION_WORKER_ID,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "last_action": status,
+            "entry_id": entry_id,
+        },
+    )
+    return {"success": True, "entry_id": entry_id, "status": status}
+
+
+@app.post("/api/hermes/execution/heartbeat", dependencies=[Depends(require_hermes_key)])
+async def hermes_execution_heartbeat(worker_id: str = Query(None)):
+    store.set_state(
+        "hermes_executor_heartbeat",
+        {
+            "worker_id": worker_id or EXECUTION_WORKER_ID,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "last_action": "heartbeat",
+        },
+    )
+    return {"success": True}
 
 
 @app.on_event("startup")

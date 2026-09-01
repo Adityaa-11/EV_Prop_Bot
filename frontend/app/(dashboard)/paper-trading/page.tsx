@@ -87,6 +87,35 @@ export default function PaperTradingPage() {
 
       {error && <Card className="mb-6 border-destructive p-4 text-sm text-destructive">{error}</Card>}
 
+      {data?.capacity?.blocked && (
+        <Card className="mb-6 border-amber-500/50 bg-amber-500/10 p-4">
+          <p className="font-semibold text-amber-600 dark:text-amber-400">Capacity reached</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {data.capacity.open_entries}/{data.capacity.max_open_entries} open entries — new paper slips are blocked
+            until entries settle or stale non-MLB slips auto-void.
+          </p>
+        </Card>
+      )}
+
+      {(data?.settlement_backlog ?? 0) > 0 && (
+        <Card className="mb-6 border-orange-500/50 bg-orange-500/10 p-4">
+          <p className="font-semibold text-orange-600 dark:text-orange-400">Settlement backlog</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {data.settlement_backlog} open entries are waiting on settlement. MLB settles automatically; other sports
+            void after the stale window.
+          </p>
+        </Card>
+      )}
+
+      {data?.automation?.status === "blocked" && (
+        <Card className="mb-6 border-destructive/50 bg-destructive/10 p-4">
+          <p className="font-semibold text-destructive">Last scan blocked</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {data.automation.message || "Risk or scan cap prevented new entries."}
+          </p>
+        </Card>
+      )}
+
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard
           label="Paper Bankroll"
@@ -137,9 +166,8 @@ export default function PaperTradingPage() {
             {data?.delivery_failures ?? 0} delivery fails · {data?.settlement_backlog ?? 0} unsettled
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            {scheduler?.enabled
-              ? "Kill switch: set PAPER_SCHEDULER_ENABLED=false on Railway"
-              : "Kill switch active: PAPER_SCHEDULER_ENABLED=false"}
+            Capacity {data?.capacity?.open_entries ?? summary?.open_entries ?? 0}/
+            {data?.capacity?.max_open_entries ?? 4} open · mode {data?.execution?.mode ?? "paper"}
           </p>
         </Card>
       </div>

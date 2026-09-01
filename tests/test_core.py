@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from automation import PaperPolicy, build_paper_entries
+from automation import PaperPolicy, build_paper_entries, void_stale_open_entries
 from api import (
     DataCache,
     Prop,
@@ -158,6 +158,150 @@ class PaperEntryTests(unittest.TestCase):
         )
         self.assertEqual(result["entries"], [])
         self.assertEqual(result["reason"], "risk_capacity_reached")
+
+
+class SettlementTests(unittest.TestCase):
+    def test_void_stale_non_mlb_entry(self):
+        now = datetime(2026, 7, 14, 12, tzinfo=timezone.utc)
+        lock_time = (now - timedelta(hours=24)).isoformat()
+        entries = [
+            {
+                "id": "paper-wnba",
+                "status": "open",
+                "sport": "WNBA",
+                "stake": 10,
+                "lock_time": lock_time,
+            }
+        ]
+        actions = void_stale_open_entries(entries, now=now, stale_hours=12)
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["result"], "void")
+        self.assertEqual(actions[0]["payout"], 10)
+
+    def test_stale_void_frees_capacity_for_new_entries(self):
+        now = datetime(2026, 7, 14, 12, tzinfo=timezone.utc)
+        lock_time = (now - timedelta(hours=24)).isoformat()
+        with tempfile.TemporaryDirectory() as directory:
+            store = PipelineStore(str(Path(directory) / "test.db"))
+            for index in range(4):
+                store.create_paper_entry(
+                    {
+                        "id": f"paper-{index}",
+                        "fingerprint": f"fp-{index}",
+                        "platform": "underdog",
+                        "sport": "WNBA",
+                        "tier": "excellent",
+                        "stake": 10,
+                        "expected_roi": 12,
+                        "potential_payout": 30,
+                        "lock_time": lock_time,
+                        "created_at": lock_time,
+                        "legs": [],
+                    }
+                )
+            self.assertEqual(store.paper_summary(200)["open_entries"], 4)
+            for action in void_stale_open_entries(store.list_open_paper_entries(), now=now, stale_hours=12):
+                store.apply_settlement(
+                    action["entry_id"],
+                    result=action["result"],
+                    payout=action["payout"],
+                    provenance=action.get("provenance"),
+                )
+            self.assertEqual(store.paper_summary(200)["open_entries"], 0)
+            game_time = (now + timedelta(hours=2)).isoformat()
+            plays = [
+                paper_play("one", "Player One", "event-1", 62, 3, 2, game_time),
+                paper_play("two", "Player Two", "event-2", 62, 3, 2, game_time),
+            ]
+            result = build_paper_entries(
+                plays,
+                stability_for=lambda _: {"stable": True},
+                policy=PaperPolicy(),
+                daily_staked=0,
+                open_entries=0,
+                now=now,
+            )
+            self.assertEqual(len(result["entries"]), 1)
+
+
+class ExecutionQueueTests(unittest.TestCase):
+    def _live_entry(self, entry_id: str, fingerprint: str) -> dict:
+        lock_time = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+        return {
+            "id": entry_id,
+            "fingerprint": fingerprint,
+            "platform": "prizepicks",
+            "sport": "NFL",
+            "tier": "excellent",
+            "stake": 5,
+            "expected_roi": 12,
+            "potential_payout": 15,
+            "lock_time": lock_time,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "legs": [
+                {
+                    "candidate_id": f"candidate-{entry_id}",
+                    "player_name": "Example Player",
+                    "stat_type": "Pass Yds",
+                    "event_id": "event-1",
+                    "market_key": "player_pass_yds",
+                    "side": "OVER",
+                    "line": 249.5,
+                    "entry_line": 249.5,
+                    "win_probability": 62,
+                },
+                {
+                    "candidate_id": f"candidate-{entry_id}-2",
+                    "player_name": "Other Player",
+                    "stat_type": "Rec Yds",
+                    "event_id": "event-2",
+                    "market_key": "player_rec_yds",
+                    "side": "UNDER",
+                    "line": 54.5,
+                    "entry_line": 54.5,
+                    "win_probability": 61,
+                },
+            ],
+        }
+
+    def test_claim_is_idempotent_for_same_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = PipelineStore(str(Path(directory) / "test.db"))
+            self.assertTrue(
+                store.create_paper_entry(self._live_entry("live-1", "fp-live-1"), execution_mode="live")
+            )
+            pending = store.list_pending_execution_entries()
+            self.assertEqual(len(pending), 1)
+            first = store.claim_execution_entry("live-1", worker_id="worker-a")
+            second = store.claim_execution_entry("live-1", worker_id="worker-a")
+            self.assertIsNotNone(first)
+            self.assertIsNotNone(second)
+            self.assertEqual(first["id"], second["id"])
+            self.assertEqual(store.list_pending_execution_entries(), [])
+
+    def test_complete_execution_marks_submitted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = PipelineStore(str(Path(directory) / "test.db"))
+            store.create_paper_entry(self._live_entry("live-2", "fp-live-2"), execution_mode="live")
+            store.claim_execution_entry("live-2", worker_id="worker-a")
+            self.assertTrue(
+                store.complete_execution_entry(
+                    "live-2",
+                    status="submitted",
+                    external_ticket_id="ticket-123",
+                )
+            )
+            entry = store.list_paper_entries()[0]
+            self.assertEqual(entry["execution_status"], "submitted")
+            self.assertEqual(entry["external_ticket_id"], "ticket-123")
+
+    def test_create_paper_entry_duplicate_fingerprint_is_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = PipelineStore(str(Path(directory) / "test.db"))
+            payload = self._live_entry("live-dup", "fp-dup")
+            self.assertTrue(store.create_paper_entry(payload, execution_mode="live"))
+            self.assertFalse(store.create_paper_entry(payload, execution_mode="live"))
+            self.assertEqual(len(store.list_pending_execution_entries()), 1)
 
 
 class StorageTests(unittest.TestCase):

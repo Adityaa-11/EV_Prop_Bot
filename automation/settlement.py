@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import aiohttp
 from fuzzywuzzy import fuzz
+
+
+SETTLEMENT_SUPPORTED_SPORTS = {"MLB"}
+STALE_ENTRY_VOID_HOURS = float(os.getenv("STALE_ENTRY_VOID_HOURS", "12"))
 
 
 SUPPORTED_MLB_MARKETS = {
@@ -94,6 +99,54 @@ async def _fetch_json(session: aiohttp.ClientSession, url: str) -> dict[str, Any
             return payload if isinstance(payload, dict) else None
     except Exception:  # noqa: BLE001
         return None
+
+
+def void_stale_open_entries(
+    entries: list[dict[str, Any]],
+    *,
+    now: datetime | None = None,
+    stale_hours: float | None = None,
+) -> list[dict[str, Any]]:
+    """Close open entries that are past lock with no settlement provider.
+
+    Non-MLB sports are voided after ``stale_hours`` beyond lock time. MLB entries
+    that remain open long after lock (e.g. unresolved boxscores) are also voided
+    after a longer grace window so capacity cannot jam indefinitely.
+    """
+    now = now or datetime.now(timezone.utc)
+    stale_hours = STALE_ENTRY_VOID_HOURS if stale_hours is None else stale_hours
+    mlb_grace_hours = max(stale_hours, float(os.getenv("MLB_STALE_VOID_HOURS", "36")))
+    actions: list[dict[str, Any]] = []
+
+    for entry in entries:
+        if entry.get("status") != "open":
+            continue
+        lock_time = _parse_utc(entry.get("lock_time"))
+        if lock_time is None:
+            continue
+
+        sport = str(entry.get("sport", "")).upper()
+        hours_past_lock = (now - lock_time).total_seconds() / 3600
+        if sport in SETTLEMENT_SUPPORTED_SPORTS:
+            if hours_past_lock < mlb_grace_hours:
+                continue
+            reason = "mlb_settlement_timeout"
+        else:
+            if hours_past_lock < stale_hours:
+                continue
+            reason = "no_settlement_provider"
+
+        actions.append(
+            {
+                "entry_id": entry["id"],
+                "status": "settled",
+                "result": "void",
+                "payout": float(entry.get("stake", 0)),
+                "provenance": reason,
+            }
+        )
+
+    return actions
 
 
 async def settle_mlb_entries(

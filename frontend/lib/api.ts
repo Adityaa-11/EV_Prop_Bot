@@ -172,6 +172,45 @@ export interface PaperResponse {
   }
   delivery_failures?: number
   settlement_backlog?: number
+  capacity?: {
+    open_entries: number
+    max_open_entries: number
+    blocked: boolean
+  }
+  execution?: {
+    mode: string
+    live_enabled: boolean
+    shadow_mode: boolean
+    live_stake: number
+  }
+  updated_at: string
+}
+
+export interface LiveEntry extends PaperEntry {
+  execution_mode?: string
+  execution_status?: string
+  execution_claimed_at?: string | null
+  execution_completed_at?: string | null
+  external_ticket_id?: string | null
+  execution_error?: string | null
+}
+
+export interface LiveResponse {
+  mode: "live"
+  enabled: boolean
+  shadow_mode: boolean
+  stake: number
+  summary: PaperResponse["summary"]
+  entries: LiveEntry[]
+  open_live_entries: number
+  pending_execution: number
+  executor_heartbeat?: {
+    worker_id?: string
+    checked_at?: string
+    last_action?: string
+    entry_id?: string
+  } | null
+  settlement_backlog?: number
   updated_at: string
 }
 
@@ -255,6 +294,10 @@ export async function checkHealth(): Promise<HealthResponse> {
 
 export async function getPaperDashboard(): Promise<PaperResponse> {
   return fetchApi<PaperResponse>("/api/paper")
+}
+
+export async function getLiveDashboard(): Promise<LiveResponse> {
+  return fetchApi<LiveResponse>("/api/live")
 }
 
 export async function getLineHistory(params: {
