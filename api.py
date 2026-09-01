@@ -145,6 +145,7 @@ LIVE_EXCELLENT_ONLY = os.getenv("LIVE_EXCELLENT_ONLY", "true").lower() in {
 }
 LIVE_STAKE = float(os.getenv("LIVE_STAKE", os.getenv("PAPER_STAKE", "10")))
 EXECUTION_WORKER_ID = os.getenv("EXECUTION_WORKER_ID", "hermes-mac-mini")
+EXECUTION_CLAIM_TTL_SECONDS = int(os.getenv("EXECUTION_CLAIM_TTL_SECONDS", "900"))
 paper_scheduler: PaperScheduler | None = None
 
 
@@ -2013,7 +2014,6 @@ async def run_paper_tick(sport: str) -> dict[str, Any]:
             )
 
         if created_entries:
-            await run_paper_delivery()
             if execution_mode == "live":
                 async with aiohttp.ClientSession() as session:
                     for entry in created_entries:
@@ -2023,6 +2023,8 @@ async def run_paper_tick(sport: str) -> dict[str, Any]:
                             status_label="LIVE — SUBMITTING",
                             extra="Queued for Hermes Playwright executor.",
                         )
+            else:
+                await run_paper_delivery()
 
         checked_at = datetime.now(timezone.utc).isoformat()
         store.set_state(
@@ -2149,7 +2151,7 @@ async def live_dashboard(limit: int = Query(100, ge=1, le=500)):
     """Public read-only live execution portfolio."""
     live_entries = store.list_entries_by_mode("live", limit)
     open_live = [entry for entry in live_entries if entry.get("status") == "open"]
-    pending_exec = store.list_pending_execution_entries(limit)
+    pending_exec = store.list_pending_execution_entries(limit, claim_ttl_seconds=EXECUTION_CLAIM_TTL_SECONDS)
     return {
         "mode": "live",
         "enabled": LIVE_EXECUTION_ENABLED,
@@ -2169,7 +2171,7 @@ async def live_dashboard(limit: int = Query(100, ge=1, le=500)):
 async def hermes_execution_pending(limit: int = Query(10, ge=1, le=20)):
     if not LIVE_EXECUTION_ENABLED:
         return {"enabled": False, "shadow_mode": EXECUTION_SHADOW_MODE, "entries": []}
-    entries = store.list_pending_execution_entries(limit)
+    entries = store.list_pending_execution_entries(limit, claim_ttl_seconds=EXECUTION_CLAIM_TTL_SECONDS)
     return {
         "enabled": True,
         "shadow_mode": EXECUTION_SHADOW_MODE,
@@ -2182,7 +2184,11 @@ async def hermes_execution_pending(limit: int = Query(10, ge=1, le=20)):
 async def hermes_execution_claim(entry_id: str):
     if not LIVE_EXECUTION_ENABLED:
         raise HTTPException(status_code=403, detail="Live execution is disabled")
-    payload = store.claim_execution_entry(entry_id, worker_id=EXECUTION_WORKER_ID)
+    payload = store.claim_execution_entry(
+        entry_id,
+        worker_id=EXECUTION_WORKER_ID,
+        claim_ttl_seconds=EXECUTION_CLAIM_TTL_SECONDS,
+    )
     if payload is None:
         raise HTTPException(status_code=404, detail="Pending live entry not found")
     store.set_state(

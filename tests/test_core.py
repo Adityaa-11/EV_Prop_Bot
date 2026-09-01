@@ -294,6 +294,34 @@ class ExecutionQueueTests(unittest.TestCase):
             entry = store.list_paper_entries()[0]
             self.assertEqual(entry["execution_status"], "submitted")
             self.assertEqual(entry["external_ticket_id"], "ticket-123")
+            self.assertEqual(entry["status"], "open")
+
+    def test_complete_execution_requires_claim(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = PipelineStore(str(Path(directory) / "test.db"))
+            store.create_paper_entry(self._live_entry("live-pending", "fp-pending"), execution_mode="live")
+            self.assertFalse(
+                store.complete_execution_entry("live-pending", status="submitted", external_ticket_id="x")
+            )
+
+    def test_failed_execution_voids_entry_to_free_capacity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = PipelineStore(str(Path(directory) / "test.db"))
+            store.create_paper_entry(self._live_entry("live-fail", "fp-fail"), execution_mode="live")
+            store.claim_execution_entry("live-fail", worker_id="worker-a")
+            self.assertTrue(store.complete_execution_entry("live-fail", status="failed", error="captcha"))
+            entry = store.list_paper_entries()[0]
+            self.assertEqual(entry["execution_status"], "failed")
+            self.assertEqual(entry["status"], "settled")
+            self.assertEqual(entry["result"], "void")
+            self.assertEqual(store.paper_summary(200)["open_entries"], 0)
+
+    def test_claim_rejects_second_worker_while_lease_active(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = PipelineStore(str(Path(directory) / "test.db"))
+            store.create_paper_entry(self._live_entry("live-lease", "fp-lease"), execution_mode="live")
+            self.assertIsNotNone(store.claim_execution_entry("live-lease", worker_id="worker-a", claim_ttl_seconds=900))
+            self.assertIsNone(store.claim_execution_entry("live-lease", worker_id="worker-b", claim_ttl_seconds=900))
 
     def test_create_paper_entry_duplicate_fingerprint_is_ignored(self):
         with tempfile.TemporaryDirectory() as directory:

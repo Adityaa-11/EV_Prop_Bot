@@ -408,6 +408,7 @@ class PipelineStore:
         mode = execution_mode.lower()
         if execution_status is None:
             execution_status = "pending" if mode == "live" else "skipped"
+        delivery_status = "skipped" if mode == "live" else "pending"
         with self._lock, self._connect() as connection:
             cursor = connection.execute(
                 """
@@ -415,7 +416,7 @@ class PipelineStore:
                     id, fingerprint, platform, sport, status, execution_mode,
                     tier, stake, expected_roi, potential_payout, lock_time,
                     created_at, delivery_status, execution_status, payload_json
-                ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+                ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     entry["id"],
@@ -429,6 +430,7 @@ class PipelineStore:
                     entry["potential_payout"],
                     entry.get("lock_time"),
                     entry["created_at"],
+                    delivery_status,
                     execution_status,
                     json.dumps(entry, separators=(",", ":"), default=str),
                 ),
@@ -615,23 +617,56 @@ class PipelineStore:
     def list_open_paper_entries(self) -> list[dict[str, Any]]:
         return [entry for entry in self.list_paper_entries(500) if entry.get("status") == "open"]
 
-    def list_pending_execution_entries(self, limit: int = 20) -> list[dict[str, Any]]:
+    def list_pending_execution_entries(
+        self,
+        limit: int = 20,
+        *,
+        claim_ttl_seconds: int = 900,
+    ) -> list[dict[str, Any]]:
         safe_limit = max(1, min(limit, 50))
         entries = self.list_paper_entries(safe_limit * 3)
-        return [
-            entry
-            for entry in entries
-            if entry.get("execution_mode") == "live"
-            and entry.get("execution_status") == "pending"
-            and entry.get("status") == "open"
-        ][:safe_limit]
+        now = datetime.now(timezone.utc)
+        pending: list[dict[str, Any]] = []
+        for entry in entries:
+            if entry.get("execution_mode") != "live" or entry.get("status") != "open":
+                continue
+            status = entry.get("execution_status")
+            if status == "pending":
+                pending.append(entry)
+            elif status == "claimed" and self._execution_claim_expired(entry, now, claim_ttl_seconds):
+                pending.append(entry)
+        return pending[:safe_limit]
 
-    def claim_execution_entry(self, entry_id: str, *, worker_id: str) -> dict[str, Any] | None:
+    @staticmethod
+    def _execution_claim_expired(
+        entry: dict[str, Any],
+        now: datetime,
+        claim_ttl_seconds: int,
+    ) -> bool:
+        claimed_at = entry.get("execution_claimed_at")
+        if not claimed_at:
+            return True
+        try:
+            claimed_time = datetime.fromisoformat(str(claimed_at))
+        except ValueError:
+            return True
+        if claimed_time.tzinfo is None:
+            claimed_time = claimed_time.replace(tzinfo=timezone.utc)
+        return (now - claimed_time).total_seconds() >= claim_ttl_seconds
+
+    def claim_execution_entry(
+        self,
+        entry_id: str,
+        *,
+        worker_id: str,
+        claim_ttl_seconds: int = 900,
+    ) -> dict[str, Any] | None:
         claimed_at = _utc_now()
+        now = datetime.now(timezone.utc)
         with self._lock, self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT id, payload_json, execution_status, execution_attempts
+                SELECT id, payload_json, execution_status, execution_claimed_at, execution_attempts
                 FROM paper_entries
                 WHERE id = ? AND status = 'open' AND execution_mode = 'live'
                 """,
@@ -639,9 +674,14 @@ class PipelineStore:
             ).fetchone()
             if row is None:
                 return None
+
             status = row["execution_status"]
+            payload = json.loads(row["payload_json"])
+            stored_worker = payload.get("execution_worker")
+            claimed_at_value = row["execution_claimed_at"] or payload.get("execution_claimed_at")
+
             if status == "pending":
-                connection.execute(
+                cursor = connection.execute(
                     """
                     UPDATE paper_entries
                     SET execution_status = 'claimed',
@@ -651,19 +691,45 @@ class PipelineStore:
                     """,
                     (claimed_at, entry_id),
                 )
+                if cursor.rowcount != 1:
+                    return None
             elif status == "claimed":
-                pass
+                if stored_worker == worker_id:
+                    pass
+                elif claimed_at_value and not self._execution_claim_expired(
+                    {"execution_claimed_at": claimed_at_value},
+                    now,
+                    claim_ttl_seconds,
+                ):
+                    return None
+                else:
+                    cursor = connection.execute(
+                        """
+                        UPDATE paper_entries
+                        SET execution_claimed_at = ?,
+                            execution_attempts = execution_attempts + 1
+                        WHERE id = ? AND execution_status = 'claimed'
+                        """,
+                        (claimed_at, entry_id),
+                    )
+                    if cursor.rowcount != 1:
+                        return None
             else:
                 return None
-            payload_row = connection.execute(
-                "SELECT payload_json FROM paper_entries WHERE id = ?",
-                (entry_id,),
-            ).fetchone()
-            if payload_row is None:
-                return None
-            payload = json.loads(payload_row["payload_json"])
+
             payload["execution_worker"] = worker_id
             payload["execution_claimed_at"] = claimed_at
+            connection.execute(
+                """
+                UPDATE paper_entries
+                SET payload_json = ?
+                WHERE id = ?
+                """,
+                (
+                    json.dumps(payload, separators=(",", ":"), default=str),
+                    entry_id,
+                ),
+            )
             return payload
 
     def complete_execution_entry(
@@ -689,13 +755,17 @@ class PipelineStore:
             ).fetchone()
             if row is None:
                 return False
-            if row["execution_status"] not in {"pending", "claimed", "submitted", "failed"}:
+            current_status = row["execution_status"]
+            if current_status not in {"claimed", "submitted", "failed", "skipped"}:
+                return False
+            if current_status != "claimed" and normalized != current_status:
                 return False
             payload = json.loads(row["payload_json"])
             if external_ticket_id:
                 payload["external_ticket_id"] = external_ticket_id
             if error:
                 payload["execution_error"] = error[:500]
+            stake = float(payload.get("stake") or 0)
             connection.execute(
                 """
                 UPDATE paper_entries
@@ -715,6 +785,19 @@ class PipelineStore:
                     entry_id,
                 ),
             )
+            if normalized in {"failed", "skipped"}:
+                connection.execute(
+                    """
+                    UPDATE paper_entries
+                    SET status = 'settled',
+                        settled_at = ?,
+                        result = 'void',
+                        payout = ?,
+                        profit = 0
+                    WHERE id = ? AND status = 'open'
+                    """,
+                    (completed_at, stake, entry_id),
+                )
             return True
 
     def list_entries_by_mode(self, execution_mode: str, limit: int = 100) -> list[dict[str, Any]]:
