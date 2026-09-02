@@ -87,6 +87,16 @@ export default function PaperTradingPage() {
 
       {error && <Card className="mb-6 border-destructive p-4 text-sm text-destructive">{error}</Card>}
 
+      {data?.capacity?.daily_cap_blocked && (
+        <Card className="mb-6 border-amber-500/50 bg-amber-500/10 p-4">
+          <p className="font-semibold text-amber-600 dark:text-amber-400">Daily stake cap reached</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            ${data.capacity.daily_staked?.toFixed(0)}/${data.capacity.daily_stake_cap?.toFixed(0)} staked today — new
+            paper slips resume after UTC midnight.
+          </p>
+        </Card>
+      )}
+
       {data?.capacity?.blocked && (
         <Card className="mb-6 border-amber-500/50 bg-amber-500/10 p-4">
           <p className="font-semibold text-amber-600 dark:text-amber-400">Capacity reached</p>
@@ -167,7 +177,9 @@ export default function PaperTradingPage() {
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
             Capacity {data?.capacity?.open_entries ?? summary?.open_entries ?? 0}/
-            {data?.capacity?.max_open_entries ?? 4} open · mode {data?.execution?.mode ?? "paper"}
+            {data?.capacity?.max_open_entries ?? 10} open · $
+            {data?.capacity?.daily_staked ?? summary?.daily_staked ?? 0}/
+            {data?.capacity?.daily_stake_cap ?? 100} today · mode {data?.execution?.mode ?? "paper"}
           </p>
         </Card>
       </div>

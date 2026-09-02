@@ -195,13 +195,13 @@ class PaperEntryTests(unittest.TestCase):
     def test_risk_capacity_never_forces_an_entry(self):
         result = build_paper_entries(
             [],
-            stability_for=lambda _: {"stable": True},
-            policy=PaperPolicy(),
+            stability_for=lambda _: {"stable": False},
+            policy=PaperPolicy(daily_stake_cap=30),
             daily_staked=30,
             open_entries=0,
         )
         self.assertEqual(result["entries"], [])
-        self.assertEqual(result["reason"], "risk_capacity_reached")
+        self.assertEqual(result["reason"], "daily_stake_cap_reached")
 
 
 class SettlementTests(unittest.TestCase):

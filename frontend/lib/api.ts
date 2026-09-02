@@ -176,6 +176,9 @@ export interface PaperResponse {
     open_entries: number
     max_open_entries: number
     blocked: boolean
+    daily_staked: number
+    daily_stake_cap: number
+    daily_cap_blocked: boolean
   }
   execution?: {
     mode: string

@@ -109,9 +109,9 @@ HERMES_API_KEY = os.getenv("HERMES_API_KEY")
 PAPER_POLICY = PaperPolicy(
     starting_bankroll=float(os.getenv("PAPER_STARTING_BANKROLL", "200")),
     stake=float(os.getenv("PAPER_STAKE", "10")),
-    daily_stake_cap=float(os.getenv("PAPER_DAILY_STAKE_CAP", "30")),
-    daily_loss_stop=float(os.getenv("PAPER_DAILY_LOSS_STOP", "30")),
-    max_open_entries=int(os.getenv("PAPER_MAX_OPEN_ENTRIES", "4")),
+    daily_stake_cap=float(os.getenv("PAPER_DAILY_STAKE_CAP", "100")),
+    daily_loss_stop=float(os.getenv("PAPER_DAILY_LOSS_STOP", "50")),
+    max_open_entries=int(os.getenv("PAPER_MAX_OPEN_ENTRIES", "10")),
     min_leg_win=float(os.getenv("PAPER_MIN_LEG_WIN", "52")),
     min_leg_books=int(os.getenv("PAPER_MIN_LEG_BOOKS", "2")),
     max_leg_dispersion=float(os.getenv("PAPER_MAX_LEG_DISPERSION", "8")),
@@ -2031,12 +2031,27 @@ async def run_paper_tick(sport: str) -> dict[str, Any]:
             ):
                 created_entries.append(prepared)
 
-        if build.get("reason") == "risk_capacity_reached":
+        reason = build.get("reason")
+        if reason == "max_open_entries_reached":
+            await _maybe_ops_alert(
+                "max_open_entries",
+                "Paper open-entry cap reached",
+                f"{summary['open_entries']}/{PAPER_POLICY.max_open_entries} open slips. "
+                "Wait for settlement or stale void before new entries.",
+            )
+        elif reason == "daily_stake_cap_reached":
+            await _maybe_ops_alert(
+                "daily_stake_cap",
+                "Paper daily stake cap reached",
+                f"${summary['daily_staked']:.0f}/${PAPER_POLICY.daily_stake_cap:.0f} staked today. "
+                "New slips resume after UTC midnight or raise PAPER_DAILY_STAKE_CAP.",
+            )
+        elif reason == "risk_capacity_reached":
             await _maybe_ops_alert(
                 "risk_capacity",
-                "Paper capacity full",
-                f"{summary['open_entries']}/{PAPER_POLICY.max_open_entries} open entries. "
-                "Clear stale entries or wait for settlement before new slips.",
+                "Paper risk capacity reached",
+                f"{summary['open_entries']}/{PAPER_POLICY.max_open_entries} open · "
+                f"${summary['daily_staked']:.0f}/${PAPER_POLICY.daily_stake_cap:.0f} staked today.",
             )
 
         if created_entries:
@@ -2109,6 +2124,10 @@ async def paper_dashboard(limit: int = Query(100, ge=1, le=500)):
             "max_open_entries": PAPER_POLICY.max_open_entries,
             "blocked": store.paper_summary(PAPER_POLICY.starting_bankroll)["open_entries"]
             >= PAPER_POLICY.max_open_entries,
+            "daily_staked": store.paper_summary(PAPER_POLICY.starting_bankroll)["daily_staked"],
+            "daily_stake_cap": PAPER_POLICY.daily_stake_cap,
+            "daily_cap_blocked": store.paper_summary(PAPER_POLICY.starting_bankroll)["daily_staked"]
+            >= PAPER_POLICY.daily_stake_cap,
         },
         "execution": {
             "mode": EXECUTION_MODE,

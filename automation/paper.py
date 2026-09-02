@@ -13,9 +13,9 @@ from typing import Any, Callable
 class PaperPolicy:
     starting_bankroll: float = 200.0
     stake: float = 10.0
-    daily_stake_cap: float = 30.0
-    daily_loss_stop: float = 30.0
-    max_open_entries: int = 4
+    daily_stake_cap: float = 100.0
+    daily_loss_stop: float = 50.0
+    max_open_entries: int = 10
     min_leg_win: float = 52.0
     min_leg_books: int = 2
     max_leg_dispersion: float = 8.0
@@ -97,7 +97,13 @@ def build_paper_entries(
     available_by_open = max(0, policy.max_open_entries - open_entries)
     available_slots = min(available_by_stake, available_by_open)
     if available_slots == 0:
-        return {"entries": [], "watch_count": len(plays), "reason": "risk_capacity_reached"}
+        if available_by_open == 0:
+            reason = "max_open_entries_reached"
+        elif available_by_stake == 0:
+            reason = "daily_stake_cap_reached"
+        else:
+            reason = "risk_capacity_reached"
+        return {"entries": [], "watch_count": len(plays), "reason": reason}
 
     eligible_plays = []
     for play in plays:
