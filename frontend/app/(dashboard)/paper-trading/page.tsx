@@ -177,9 +177,9 @@ export default function PaperTradingPage() {
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
             Capacity {data?.capacity?.open_entries ?? summary?.open_entries ?? 0}/
-            {data?.capacity?.max_open_entries ?? 10} open · $
+            {data?.capacity?.max_open_entries ?? 20} open · $
             {data?.capacity?.daily_staked ?? summary?.daily_staked ?? 0}/
-            {data?.capacity?.daily_stake_cap ?? 100} today · mode {data?.execution?.mode ?? "paper"}
+            {data?.capacity?.daily_stake_cap ?? 200} today · mode {data?.execution?.mode ?? "paper"}
           </p>
         </Card>
       </div>

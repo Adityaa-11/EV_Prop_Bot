@@ -13,9 +13,9 @@ from typing import Any, Callable
 class PaperPolicy:
     starting_bankroll: float = 200.0
     stake: float = 10.0
-    daily_stake_cap: float = 100.0
-    daily_loss_stop: float = 50.0
-    max_open_entries: int = 10
+    daily_stake_cap: float = 200.0
+    daily_loss_stop: float = 200.0
+    max_open_entries: int = 20
     min_leg_win: float = 52.0
     min_leg_books: int = 2
     max_leg_dispersion: float = 8.0
