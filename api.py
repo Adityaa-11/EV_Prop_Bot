@@ -33,6 +33,7 @@ from automation import (
     PaperPolicy,
     PaperScheduler,
     build_paper_entries,
+    compute_paper_capacity,
     deliver_paper_entry,
     deliver_live_status,
     deliver_ops_alert,
@@ -112,6 +113,8 @@ PAPER_POLICY = PaperPolicy(
     daily_stake_cap=float(os.getenv("PAPER_DAILY_STAKE_CAP", "200")),
     daily_loss_stop=float(os.getenv("PAPER_DAILY_LOSS_STOP", "200")),
     max_open_entries=int(os.getenv("PAPER_MAX_OPEN_ENTRIES", "20")),
+    max_far_open_entries=int(os.getenv("PAPER_MAX_FAR_OPEN_ENTRIES", "5")),
+    near_lock_hours=float(os.getenv("PAPER_NEAR_LOCK_HOURS", "48")),
     min_leg_win=float(os.getenv("PAPER_MIN_LEG_WIN", "52")),
     min_leg_books=int(os.getenv("PAPER_MIN_LEG_BOOKS", "2")),
     max_leg_dispersion=float(os.getenv("PAPER_MAX_LEG_DISPERSION", "8")),
@@ -1867,6 +1870,39 @@ async def _maybe_ops_alert(message_key: str, title: str, body: str) -> None:
     store.set_state(f"ops_alert:{message_key}", {"date": today, "title": title})
 
 
+def _paper_open_horizon() -> dict[str, int]:
+    return store.count_open_entries_by_horizon(PAPER_POLICY.near_lock_hours)
+
+
+def _paper_capacity_payload() -> dict[str, Any]:
+    summary = store.paper_summary(PAPER_POLICY.starting_bankroll)
+    horizon = _paper_open_horizon()
+    capacity = compute_paper_capacity(
+        PAPER_POLICY,
+        daily_staked=summary["daily_staked"],
+        daily_profit=summary["daily_profit"],
+        open_near=horizon["near"],
+        open_far=horizon["far"],
+    )
+    return {
+        "open_entries": summary["open_entries"],
+        "open_near": horizon["near"],
+        "open_far": horizon["far"],
+        "max_open_entries": PAPER_POLICY.max_open_entries,
+        "max_far_open_entries": PAPER_POLICY.max_far_open_entries,
+        "near_lock_hours": PAPER_POLICY.near_lock_hours,
+        "blocked": not capacity["can_create"],
+        "scan_blocked": not capacity["can_scan"],
+        "block_reason": capacity["reason"],
+        "daily_staked": summary["daily_staked"],
+        "daily_stake_cap": PAPER_POLICY.daily_stake_cap,
+        "daily_cap_blocked": summary["daily_staked"] >= PAPER_POLICY.daily_stake_cap,
+        "stake_slots_remaining": capacity["stake_slots"],
+        "near_slots_remaining": capacity["near_slots"],
+        "far_slots_remaining": capacity["far_slots"],
+    }
+
+
 def _effective_execution_mode() -> str:
     if EXECUTION_MODE == "live" and LIVE_EXECUTION_ENABLED:
         return "live"
@@ -1997,6 +2033,44 @@ async def run_paper_tick(sport: str) -> dict[str, Any]:
             )
             return {**latest, "created_entries": [], "created_count": 0}
 
+        summary = store.paper_summary(PAPER_POLICY.starting_bankroll)
+        horizon = _paper_open_horizon()
+        capacity = compute_paper_capacity(
+            PAPER_POLICY,
+            daily_staked=summary["daily_staked"],
+            daily_profit=summary["daily_profit"],
+            open_near=horizon["near"],
+            open_far=horizon["far"],
+        )
+        if not capacity["can_scan"]:
+            latest = {
+                "status": "waiting",
+                "sport": normalized_sport.upper(),
+                "message": capacity["reason"],
+                "capacity": capacity,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            }
+            store.set_state("paper_latest", latest)
+            if capacity["reason"] == "daily_stake_cap_reached":
+                await _maybe_ops_alert(
+                    "daily_stake_cap",
+                    "Paper daily stake cap reached",
+                    f"${summary['daily_staked']:.0f}/${PAPER_POLICY.daily_stake_cap:.0f} staked today. "
+                    "Skipping paid scans until UTC midnight.",
+                )
+            elif capacity["reason"] in {
+                "max_near_open_entries_reached",
+                "max_open_entries_reached",
+            }:
+                await _maybe_ops_alert(
+                    "max_near_open_entries",
+                    "Paper near-term slots full",
+                    f"{horizon['near']}/{PAPER_POLICY.max_open_entries} near locks (≤{PAPER_POLICY.near_lock_hours:.0f}h). "
+                    f"{horizon['far']}/{PAPER_POLICY.max_far_open_entries} far slots used. "
+                    "Skipping paid scans to save Odds API quota.",
+                )
+            return {**latest, "created_entries": [], "created_count": 0}
+
         scan = await hermes_scan(
             sport=normalized_sport,
             platform="all",
@@ -2008,7 +2082,7 @@ async def run_paper_tick(sport: str) -> dict[str, Any]:
         store.record_candidate_observations(plays)
         updated_closing_lines = store.update_open_entry_closing_lines(plays)
         store.freeze_closing_lines_past_lock()
-        summary = store.paper_summary(PAPER_POLICY.starting_bankroll)
+        horizon = _paper_open_horizon()
         execution_mode = _effective_execution_mode()
         entry_policy = _entry_policy_for_mode(execution_mode)
         build = build_paper_entries(
@@ -2017,7 +2091,8 @@ async def run_paper_tick(sport: str) -> dict[str, Any]:
             policy=entry_policy,
             daily_staked=summary["daily_staked"],
             daily_profit=summary["daily_profit"],
-            open_entries=summary["open_entries"],
+            open_near=horizon["near"],
+            open_far=horizon["far"],
         )
         created_entries = []
         for entry in build["entries"]:
@@ -2036,8 +2111,14 @@ async def run_paper_tick(sport: str) -> dict[str, Any]:
             await _maybe_ops_alert(
                 "max_open_entries",
                 "Paper open-entry cap reached",
-                f"{summary['open_entries']}/{PAPER_POLICY.max_open_entries} open slips. "
-                "Wait for settlement or stale void before new entries.",
+                f"{horizon['near']}/{PAPER_POLICY.max_open_entries} near · "
+                f"{horizon['far']}/{PAPER_POLICY.max_far_open_entries} far open slips.",
+            )
+        elif reason == "max_near_open_entries_reached":
+            await _maybe_ops_alert(
+                "max_near_open_entries",
+                "Paper near-term slots full",
+                f"{horizon['near']}/{PAPER_POLICY.max_open_entries} near locks filled.",
             )
         elif reason == "daily_stake_cap_reached":
             await _maybe_ops_alert(
@@ -2119,16 +2200,7 @@ async def paper_dashboard(limit: int = Query(100, ge=1, le=500)):
         },
         "delivery_failures": store.delivery_failure_count(),
         "settlement_backlog": store.settlement_backlog_count(),
-        "capacity": {
-            "open_entries": store.paper_summary(PAPER_POLICY.starting_bankroll)["open_entries"],
-            "max_open_entries": PAPER_POLICY.max_open_entries,
-            "blocked": store.paper_summary(PAPER_POLICY.starting_bankroll)["open_entries"]
-            >= PAPER_POLICY.max_open_entries,
-            "daily_staked": store.paper_summary(PAPER_POLICY.starting_bankroll)["daily_staked"],
-            "daily_stake_cap": PAPER_POLICY.daily_stake_cap,
-            "daily_cap_blocked": store.paper_summary(PAPER_POLICY.starting_bankroll)["daily_staked"]
-            >= PAPER_POLICY.daily_stake_cap,
-        },
+        "capacity": _paper_capacity_payload(),
         "execution": {
             "mode": EXECUTION_MODE,
             "live_enabled": LIVE_EXECUTION_ENABLED,

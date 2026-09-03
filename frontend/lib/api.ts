@@ -174,11 +174,20 @@ export interface PaperResponse {
   settlement_backlog?: number
   capacity?: {
     open_entries: number
+    open_near?: number
+    open_far?: number
     max_open_entries: number
+    max_far_open_entries?: number
+    near_lock_hours?: number
     blocked: boolean
+    scan_blocked?: boolean
+    block_reason?: string | null
     daily_staked: number
     daily_stake_cap: number
     daily_cap_blocked: boolean
+    stake_slots_remaining?: number
+    near_slots_remaining?: number
+    far_slots_remaining?: number
   }
   execution?: {
     mode: string

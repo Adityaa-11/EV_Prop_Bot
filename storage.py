@@ -617,6 +617,34 @@ class PipelineStore:
     def list_open_paper_entries(self) -> list[dict[str, Any]]:
         return [entry for entry in self.list_paper_entries(500) if entry.get("status") == "open"]
 
+    def count_open_entries_by_horizon(
+        self,
+        near_lock_hours: float,
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, int]:
+        now = now or datetime.now(timezone.utc)
+        cutoff = now.timestamp() + near_lock_hours * 3600
+        near = 0
+        far = 0
+        for entry in self.list_open_paper_entries():
+            lock_time = entry.get("lock_time")
+            if not lock_time:
+                near += 1
+                continue
+            try:
+                parsed = datetime.fromisoformat(str(lock_time).replace("Z", "+00:00"))
+            except ValueError:
+                near += 1
+                continue
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            if parsed.timestamp() <= cutoff:
+                near += 1
+            else:
+                far += 1
+        return {"near": near, "far": far, "total": near + far}
+
     def list_pending_execution_entries(
         self,
         limit: int = 20,

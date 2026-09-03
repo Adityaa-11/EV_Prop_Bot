@@ -87,7 +87,18 @@ export default function PaperTradingPage() {
 
       {error && <Card className="mb-6 border-destructive p-4 text-sm text-destructive">{error}</Card>}
 
-      {data?.capacity?.daily_cap_blocked && (
+      {data?.capacity?.scan_blocked && (
+        <Card className="mb-6 border-amber-500/50 bg-amber-500/10 p-4">
+          <p className="font-semibold text-amber-600 dark:text-amber-400">Paid scans paused</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {data.capacity.block_reason === "daily_stake_cap_reached"
+              ? `Daily stake cap hit ($${data.capacity.daily_staked?.toFixed(0)}/$${data.capacity.daily_stake_cap?.toFixed(0)}) — saving Odds API scans until UTC midnight.`
+              : `Near-term slots full (${data.capacity.open_near ?? 0}/${data.capacity.max_open_entries}) — scans resume when games settle or far-only capacity opens.`}
+          </p>
+        </Card>
+      )}
+
+      {data?.capacity?.daily_cap_blocked && !data?.capacity?.scan_blocked && (
         <Card className="mb-6 border-amber-500/50 bg-amber-500/10 p-4">
           <p className="font-semibold text-amber-600 dark:text-amber-400">Daily stake cap reached</p>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -176,10 +187,13 @@ export default function PaperTradingPage() {
             {data?.delivery_failures ?? 0} delivery fails · {data?.settlement_backlog ?? 0} unsettled
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Capacity {data?.capacity?.open_entries ?? summary?.open_entries ?? 0}/
-            {data?.capacity?.max_open_entries ?? 20} open · $
-            {data?.capacity?.daily_staked ?? summary?.daily_staked ?? 0}/
-            {data?.capacity?.daily_stake_cap ?? 200} today · mode {data?.execution?.mode ?? "paper"}
+            Capacity near {data?.capacity?.open_near ?? data?.capacity?.open_entries ?? 0}/
+            {data?.capacity?.max_open_entries ?? 20}
+            {typeof data?.capacity?.open_far === "number"
+              ? ` · far ${data.capacity.open_far}/${data?.capacity?.max_far_open_entries ?? 5}`
+              : ""}{" "}
+            · ${data?.capacity?.daily_staked ?? summary?.daily_staked ?? 0}/
+            {data?.capacity?.daily_stake_cap ?? 200} today
           </p>
         </Card>
       </div>

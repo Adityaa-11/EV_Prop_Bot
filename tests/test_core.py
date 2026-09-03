@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from automation import PaperPolicy, build_paper_entries, void_stale_open_entries
+from automation import PaperPolicy, build_paper_entries, compute_paper_capacity, void_stale_open_entries
 from api import (
     DataCache,
     Prop,
@@ -191,6 +191,47 @@ class PaperEntryTests(unittest.TestCase):
         )
         self.assertEqual(result["entries"], [])
         self.assertEqual(result["reason"], "no_qualifying_entry")
+
+    def test_far_entries_use_separate_open_bucket(self):
+        now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)
+        far_time = (now + timedelta(hours=72)).isoformat()
+        plays = [
+            paper_play("one", "Player One", "event-1", 55, 2, 4, far_time),
+            paper_play("two", "Player Two", "event-2", 55, 2, 4, far_time),
+        ]
+        result = build_paper_entries(
+            plays,
+            stability_for=lambda _: {"stable": False},
+            policy=PaperPolicy(max_open_entries=20, max_far_open_entries=5),
+            daily_staked=0,
+            open_near=20,
+            open_far=0,
+            now=now,
+        )
+        self.assertEqual(len(result["entries"]), 1)
+
+    def test_scan_blocked_when_near_full_even_with_far_room(self):
+        capacity = compute_paper_capacity(
+            PaperPolicy(max_open_entries=20, max_far_open_entries=5),
+            daily_staked=0,
+            daily_profit=0,
+            open_near=20,
+            open_far=0,
+        )
+        self.assertFalse(capacity["can_scan"])
+        self.assertTrue(capacity["can_create"])
+        self.assertEqual(capacity["reason"], "max_near_open_entries_reached")
+
+    def test_scan_blocked_when_daily_stake_cap_hit(self):
+        capacity = compute_paper_capacity(
+            PaperPolicy(daily_stake_cap=200),
+            daily_staked=200,
+            daily_profit=0,
+            open_near=0,
+            open_far=0,
+        )
+        self.assertFalse(capacity["can_scan"])
+        self.assertEqual(capacity["reason"], "daily_stake_cap_reached")
 
     def test_risk_capacity_never_forces_an_entry(self):
         result = build_paper_entries(

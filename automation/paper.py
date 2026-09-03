@@ -16,6 +16,8 @@ class PaperPolicy:
     daily_stake_cap: float = 200.0
     daily_loss_stop: float = 200.0
     max_open_entries: int = 20
+    max_far_open_entries: int = 5
+    near_lock_hours: float = 48.0
     min_leg_win: float = 52.0
     min_leg_books: int = 2
     max_leg_dispersion: float = 8.0
@@ -76,6 +78,71 @@ def _compatible(first: dict[str, Any], second: dict[str, Any]) -> bool:
     return True
 
 
+def _lock_minutes(entry: dict[str, Any], now: datetime) -> float:
+    lock_time = _utc_datetime(entry.get("lock_time"))
+    if lock_time is None:
+        return 0.0
+    return (lock_time - now).total_seconds() / 60
+
+
+def _is_far_entry(entry: dict[str, Any], policy: PaperPolicy, now: datetime) -> bool:
+    return _lock_minutes(entry, now) > policy.near_lock_hours * 60
+
+
+def compute_paper_capacity(
+    policy: PaperPolicy,
+    *,
+    daily_staked: float,
+    daily_profit: float,
+    open_near: int,
+    open_far: int,
+) -> dict[str, Any]:
+    """Return stake and open-slot headroom for entry creation and scan gating."""
+    if daily_profit <= -policy.daily_loss_stop:
+        return {
+            "can_create": False,
+            "can_scan": False,
+            "reason": "daily_loss_stop_reached",
+            "stake_slots": 0,
+            "near_slots": 0,
+            "far_slots": 0,
+            "open_near": open_near,
+            "open_far": open_far,
+        }
+
+    stake_slots = max(0, int((policy.daily_stake_cap - daily_staked) // policy.stake))
+    near_slots = max(0, policy.max_open_entries - open_near)
+    far_slots = max(0, policy.max_far_open_entries - open_far)
+    can_create = stake_slots > 0 and (near_slots > 0 or far_slots > 0)
+    # Scheduler scans only games inside the 6h window, so near slots are what matter.
+    can_scan = stake_slots > 0 and near_slots > 0
+
+    if not can_create:
+        if stake_slots == 0:
+            reason = "daily_stake_cap_reached"
+        elif near_slots == 0 and far_slots == 0:
+            reason = "max_open_entries_reached"
+        elif near_slots == 0:
+            reason = "max_near_open_entries_reached"
+        else:
+            reason = "max_far_open_entries_reached"
+    elif not can_scan:
+        reason = "max_near_open_entries_reached"
+    else:
+        reason = None
+
+    return {
+        "can_create": can_create,
+        "can_scan": can_scan,
+        "reason": reason,
+        "stake_slots": stake_slots,
+        "near_slots": near_slots,
+        "far_slots": far_slots,
+        "open_near": open_near,
+        "open_far": open_far,
+    }
+
+
 def build_paper_entries(
     plays: list[dict[str, Any]],
     *,
@@ -83,27 +150,36 @@ def build_paper_entries(
     policy: PaperPolicy,
     daily_staked: float,
     daily_profit: float = 0,
-    open_entries: int,
+    open_entries: int = 0,
+    open_near: int | None = None,
+    open_far: int | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Return the best non-overlapping slips while allowing complete abstention."""
     now = now or datetime.now(timezone.utc)
-    if daily_profit <= -policy.daily_loss_stop:
-        return {"entries": [], "watch_count": len(plays), "reason": "daily_loss_stop_reached"}
-    available_by_stake = max(
-        0,
-        int((policy.daily_stake_cap - daily_staked) // policy.stake),
+    if open_near is None:
+        open_near = open_entries
+    if open_far is None:
+        open_far = 0
+
+    capacity = compute_paper_capacity(
+        policy,
+        daily_staked=daily_staked,
+        daily_profit=daily_profit,
+        open_near=open_near,
+        open_far=open_far,
     )
-    available_by_open = max(0, policy.max_open_entries - open_entries)
-    available_slots = min(available_by_stake, available_by_open)
-    if available_slots == 0:
-        if available_by_open == 0:
-            reason = "max_open_entries_reached"
-        elif available_by_stake == 0:
-            reason = "daily_stake_cap_reached"
-        else:
-            reason = "risk_capacity_reached"
-        return {"entries": [], "watch_count": len(plays), "reason": reason}
+    if not capacity["can_create"]:
+        return {
+            "entries": [],
+            "watch_count": len(plays),
+            "reason": capacity["reason"],
+            "capacity": capacity,
+        }
+
+    near_slots = capacity["near_slots"]
+    far_slots = capacity["far_slots"]
+    stake_slots = capacity["stake_slots"]
 
     eligible_plays = []
     for play in plays:
@@ -197,24 +273,39 @@ def build_paper_entries(
 
     combinations.sort(
         key=lambda entry: (
+            _is_far_entry(entry, policy, now),
+            _lock_minutes(entry, now),
             entry["tier"] == "excellent",
             entry["expected_roi"],
         ),
-        reverse=True,
     )
     selected = []
     used_candidates: set[str] = set()
+    remaining_stake = stake_slots
+    remaining_near = near_slots
+    remaining_far = far_slots
     for entry in combinations:
         candidate_ids = {leg["candidate_id"] for leg in entry["legs"]}
         if candidate_ids & used_candidates:
             continue
+        is_far = _is_far_entry(entry, policy, now)
+        if is_far:
+            if remaining_far <= 0 or remaining_stake <= 0:
+                continue
+            remaining_far -= 1
+        else:
+            if remaining_near <= 0 or remaining_stake <= 0:
+                continue
+            remaining_near -= 1
+        remaining_stake -= 1
         selected.append(entry)
         used_candidates.update(candidate_ids)
-        if len(selected) >= available_slots:
+        if remaining_stake <= 0 or (remaining_near <= 0 and remaining_far <= 0):
             break
 
     return {
         "entries": selected,
         "watch_count": max(0, len(plays) - len(selected) * 2),
         "reason": None if selected else "no_qualifying_entry",
+        "capacity": capacity,
     }
