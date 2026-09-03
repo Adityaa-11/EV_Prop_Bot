@@ -23,8 +23,8 @@ Execute backend-approved live entries. The FastAPI backend alone decides eligibi
 2. Run `python scripts/run_executor.py` from this skill directory.
 3. For each pending entry returned by the backend:
    - Claim via `POST /api/hermes/execution/{id}/claim`
-   - If `shadow_mode` is true: open the platform, verify both legs exist, screenshot, report `skipped` with note `shadow_mode`
-   - If `shadow_mode` is false: enter exact legs and stake, submit, capture confirmation id
+- If `shadow_mode` is true: open the platform, verify both legs exist, screenshot, report `skipped`
+- If `shadow_mode` is false: select exact legs, set stake, click Submit, capture ticket id
    - Report via `POST /api/hermes/execution/{id}/result`
 4. Send a short Discord summary if configured (backend also alerts).
 

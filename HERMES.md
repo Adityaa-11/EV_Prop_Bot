@@ -53,13 +53,46 @@ export EV_BACKEND_URL=https://web-production-f7afc.up.railway.app
 export HERMES_API_KEY=your_key
 export PP_BROWSER_PROFILE=$HOME/.ev-bot/prizepicks-profile
 export UD_BROWSER_PROFILE=$HOME/.ev-bot/underdog-profile
+export EV_BOT_ARTIFACTS=$HOME/.ev-bot/artifacts
 
-# Install Playwright once
-npx playwright install chromium
+cd hermes/skills/place-dfs-entry/scripts
+python3 -m pip install -r requirements.txt
+python3 -m playwright install chromium
+
+# Log in once manually (non-headless):
+#   PP_HEADLESS=false python3 -c "from playwright.sync_api import sync_playwright; p=sync_playwright().start(); c=p.chromium.launch_persistent_context('$PP_BROWSER_PROFILE', headless=False); pg=c.new_page(); pg.goto('https://app.prizepicks.com/board'); input('Log in, then press Enter...'); c.close()"
+# Repeat for Underdog profile at https://underdogfantasy.com/pick-em/higher-lower/all
 
 # Copy skills to Hermes
 cp -R hermes/skills/* ~/.hermes/skills/
 ```
+
+### Test one executor pass (shadow — no submit)
+
+```bash
+export EXECUTION_SHADOW_MODE=true
+python3 hermes/skills/place-dfs-entry/scripts/run_executor.py
+```
+
+### Live submit (real entries)
+
+Railway:
+
+```bash
+EXECUTION_MODE=live
+LIVE_EXECUTION_ENABLED=true
+EXECUTION_SHADOW_MODE=false
+LIVE_STAKE=5
+```
+
+Mac Mini:
+
+```bash
+export EXECUTION_SHADOW_MODE=false
+python3 hermes/skills/place-dfs-entry/scripts/run_executor.py
+```
+
+Screenshots on failure/success: `$EV_BOT_ARTIFACTS`.
 
 Schedule (launchd or cron every 2–5 min):
 
