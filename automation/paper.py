@@ -14,7 +14,7 @@ class PaperPolicy:
     starting_bankroll: float = 200.0
     stake: float = 10.0
     daily_stake_cap: float = 60.0
-    daily_loss_stop: float = 40.0
+    daily_loss_stop: float = 200.0
     max_open_entries: int = 6
     max_far_open_entries: int = 2
     near_lock_hours: float = 48.0
