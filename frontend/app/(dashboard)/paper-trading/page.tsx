@@ -60,6 +60,7 @@ export default function PaperTradingPage() {
   }
 
   const summary = data?.summary
+  const v2 = data?.v2_summary
   const scheduler = data?.scheduler
   const quota = data?.quota
 
@@ -137,7 +138,7 @@ export default function PaperTradingPage() {
         </Card>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <MetricCard
           label="Paper Bankroll"
           value={currency.format(summary?.bankroll ?? 200)}
@@ -157,6 +158,11 @@ export default function PaperTradingPage() {
           label="Record"
           value={`${summary?.wins ?? 0}-${summary?.losses ?? 0}-${summary?.pushes ?? 0}`}
           detail={`${summary?.entries ?? 0} total simulated slips`}
+        />
+        <MetricCard
+          label="V2 Results"
+          value={`${v2?.wins ?? 0}-${v2?.losses ?? 0}`}
+          detail={`${currency.format(v2?.profit ?? 0)} · ${v2?.win_rate ?? 0}% WR · ${v2?.voids ?? 0} void · since ${v2?.since ?? "2026-09-01"}`}
         />
       </div>
 

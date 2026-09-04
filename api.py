@@ -138,6 +138,7 @@ LIVE_ENTRY_POLICY = PaperPolicy(
     strong_roi=float(os.getenv("LIVE_STRONG_ROI", "5")),
 )
 PAPER_DAILY_SCAN_CAP = int(os.getenv("PAPER_DAILY_SCAN_CAP", "24"))
+PAPER_V2_START = os.getenv("PAPER_V2_START", "2026-09-01")
 PAPER_SCHEDULER_ENABLED = os.getenv("PAPER_SCHEDULER_ENABLED", "false").lower() in {
     "1",
     "true",
@@ -2187,6 +2188,10 @@ async def paper_dashboard(limit: int = Query(100, ge=1, le=500)):
     return {
         "mode": "paper",
         "summary": store.paper_summary(PAPER_POLICY.starting_bankroll),
+        "v2_summary": store.paper_summary_since(
+            PAPER_POLICY.starting_bankroll,
+            since=PAPER_V2_START,
+        ),
         "entries": store.list_paper_entries(limit),
         "automation": store.get_state("paper_latest") or {
             "status": "waiting",

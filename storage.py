@@ -553,6 +553,52 @@ class PipelineStore:
             "last_updated": totals["last_updated"],
         }
 
+    def paper_summary_since(
+        self,
+        starting_bankroll: float,
+        *,
+        since: str,
+    ) -> dict[str, Any]:
+        """Summary for entries created on/after ``since`` (UTC date or ISO timestamp)."""
+        since_key = since[:10]
+        with self._connect() as connection:
+            totals = connection.execute(
+                """
+                SELECT
+                    COUNT(*) AS entries,
+                    SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) AS open_entries,
+                    SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) AS wins,
+                    SUM(CASE WHEN result = 'loss' THEN 1 ELSE 0 END) AS losses,
+                    SUM(CASE WHEN result = 'push' THEN 1 ELSE 0 END) AS pushes,
+                    SUM(CASE WHEN result = 'void' THEN 1 ELSE 0 END) AS voids,
+                    COALESCE(SUM(CASE WHEN status = 'open' THEN stake ELSE 0 END), 0) AS exposure,
+                    COALESCE(SUM(CASE WHEN status = 'settled' THEN profit ELSE 0 END), 0) AS profit,
+                    MAX(created_at) AS last_updated
+                FROM paper_entries
+                WHERE substr(created_at, 1, 10) >= ?
+                """,
+                (since_key,),
+            ).fetchone()
+        profit = float(totals["profit"] or 0)
+        wins = int(totals["wins"] or 0)
+        losses = int(totals["losses"] or 0)
+        decided = wins + losses
+        return {
+            "since": since_key,
+            "starting_bankroll": round(starting_bankroll, 2),
+            "bankroll": round(starting_bankroll + profit, 2),
+            "profit": round(profit, 2),
+            "exposure": round(float(totals["exposure"] or 0), 2),
+            "entries": int(totals["entries"] or 0),
+            "open_entries": int(totals["open_entries"] or 0),
+            "wins": wins,
+            "losses": losses,
+            "pushes": int(totals["pushes"] or 0),
+            "voids": int(totals["voids"] or 0),
+            "win_rate": round(wins / decided * 100, 2) if decided else 0.0,
+            "last_updated": totals["last_updated"],
+        }
+
     def get_state(self, key: str) -> dict[str, Any] | None:
         with self._connect() as connection:
             row = connection.execute(

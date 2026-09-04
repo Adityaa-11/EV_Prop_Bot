@@ -147,6 +147,21 @@ export interface PaperResponse {
     daily_profit?: number
     last_updated: string | null
   }
+  v2_summary?: {
+    since: string
+    starting_bankroll: number
+    bankroll: number
+    profit: number
+    exposure: number
+    entries: number
+    open_entries: number
+    wins: number
+    losses: number
+    pushes: number
+    voids: number
+    win_rate: number
+    last_updated: string | null
+  }
   entries: PaperEntry[]
   automation: {
     status: string
