@@ -22,7 +22,7 @@ class PaperPolicy:
     min_leg_win: float = 58.0
     min_leg_books: int = 3
     max_leg_dispersion: float = 4.0
-    require_line_stability: bool = True
+    require_line_stability: bool = False
     excellent_roi: float = 8.0
     strong_roi: float = 5.0
     strong_lock_minutes: int = 30

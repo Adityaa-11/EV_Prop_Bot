@@ -130,26 +130,7 @@ class PaperEntryTests(unittest.TestCase):
         self.assertEqual(result["entries"], [])
         self.assertEqual(result["reason"], "no_qualifying_entry")
 
-    def test_excellent_entry_requires_stable_high_edge_legs(self):
-        now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)
-        game_time = (now + timedelta(hours=2)).isoformat()
-        plays = [
-            paper_play("one", "Player One", "event-1", 62, 3, 2, game_time),
-            paper_play("two", "Player Two", "event-2", 62, 3, 2, game_time),
-        ]
-        result = build_paper_entries(
-            plays,
-            stability_for=lambda _: {"stable": True},
-            policy=PaperPolicy(),
-            daily_staked=0,
-            open_entries=0,
-            now=now,
-        )
-        self.assertEqual(len(result["entries"]), 1)
-        self.assertEqual(result["entries"][0]["tier"], "excellent")
-        self.assertGreaterEqual(result["entries"][0]["expected_roi"], 8)
-
-    def test_strict_policy_still_requires_stability(self):
+    def test_excellent_entry_fires_on_first_scan_without_stability(self):
         now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)
         game_time = (now + timedelta(hours=2)).isoformat()
         plays = [
@@ -160,6 +141,25 @@ class PaperEntryTests(unittest.TestCase):
             plays,
             stability_for=lambda _: {"stable": False},
             policy=PaperPolicy(),
+            daily_staked=0,
+            open_entries=0,
+            now=now,
+        )
+        self.assertEqual(len(result["entries"]), 1)
+        self.assertEqual(result["entries"][0]["tier"], "excellent")
+        self.assertGreaterEqual(result["entries"][0]["expected_roi"], 8)
+
+    def test_optional_stability_flag_still_blocks_unstable_lines(self):
+        now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)
+        game_time = (now + timedelta(hours=2)).isoformat()
+        plays = [
+            paper_play("one", "Player One", "event-1", 62, 3, 2, game_time),
+            paper_play("two", "Player Two", "event-2", 62, 3, 2, game_time),
+        ]
+        result = build_paper_entries(
+            plays,
+            stability_for=lambda _: {"stable": False},
+            policy=PaperPolicy(require_line_stability=True),
             daily_staked=0,
             open_entries=0,
             now=now,

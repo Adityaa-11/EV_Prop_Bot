@@ -118,7 +118,7 @@ PAPER_POLICY = PaperPolicy(
     min_leg_win=float(os.getenv("PAPER_MIN_LEG_WIN", "58")),
     min_leg_books=int(os.getenv("PAPER_MIN_LEG_BOOKS", "3")),
     max_leg_dispersion=float(os.getenv("PAPER_MAX_LEG_DISPERSION", "4")),
-    require_line_stability=os.getenv("PAPER_REQUIRE_LINE_STABILITY", "true").lower()
+    require_line_stability=os.getenv("PAPER_REQUIRE_LINE_STABILITY", "false").lower()
     in {"1", "true", "yes"},
     excellent_roi=float(os.getenv("PAPER_EXCELLENT_ROI", "8")),
     strong_roi=float(os.getenv("PAPER_STRONG_ROI", "5")),
