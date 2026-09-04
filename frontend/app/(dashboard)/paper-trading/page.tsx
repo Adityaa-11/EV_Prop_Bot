@@ -162,7 +162,7 @@ export default function PaperTradingPage() {
         <MetricCard
           label="V2 Results"
           value={`${v2?.wins ?? 0}-${v2?.losses ?? 0}`}
-          detail={`${currency.format(v2?.profit ?? 0)} · ${v2?.win_rate ?? 0}% WR · ${v2?.voids ?? 0} void · since ${v2?.since ?? "2026-09-01"}`}
+          detail={`${currency.format(v2?.profit ?? 0)} · ${v2?.win_rate ?? 0}% WR · ${v2?.voids ?? 0} void · since ${v2?.since ?? "2026-09-04"}`}
         />
       </div>
 
