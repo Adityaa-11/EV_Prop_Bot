@@ -127,6 +127,7 @@ export interface PaperEntry {
   delivery_status: string
   delivery_attempts?: number
   delivery_error?: string | null
+  paper_version?: "v1" | "v2"
   legs: PaperLeg[]
 }
 
@@ -162,6 +163,7 @@ export interface PaperResponse {
     win_rate: number
     last_updated: string | null
   }
+  v2_start?: string
   entries: PaperEntry[]
   automation: {
     status: string

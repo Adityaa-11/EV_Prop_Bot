@@ -242,7 +242,11 @@ export default function PaperTradingPage() {
         </Card>
       ) : (
         <div className="space-y-4">
-          {data.entries.map((entry) => (
+          {data.entries.map((entry) => {
+            const version =
+              entry.paper_version ??
+              ((entry.created_at || "").slice(0, 10) >= (data.v2_start ?? "2026-09-04") ? "v2" : "v1")
+            return (
             <Card key={entry.id} className="overflow-hidden">
               <div className="flex flex-col justify-between gap-3 border-b p-5 sm:flex-row sm:items-center">
                 <div className="flex flex-wrap items-center gap-2">
@@ -252,6 +256,9 @@ export default function PaperTradingPage() {
                     {entry.tier}
                   </Badge>
                   <Badge variant="secondary">PAPER</Badge>
+                  <Badge variant={version === "v2" ? "default" : "outline"}>
+                    {version.toUpperCase()}
+                  </Badge>
                   <Badge variant={entry.delivery_status === "sent" ? "default" : "outline"}>
                     Discord {entry.delivery_status}
                   </Badge>
@@ -331,7 +338,8 @@ export default function PaperTradingPage() {
                 </span>
               </div>
             </Card>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>

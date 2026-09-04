@@ -2185,6 +2185,13 @@ async def paper_dashboard(limit: int = Query(100, ge=1, le=500)):
     budget = store.get_state("paper_scan_budget") or {}
     today = datetime.now(timezone.utc).date().isoformat()
     scans_today = int(budget.get("count", 0)) if budget.get("date") == today else 0
+    v2_since = PAPER_V2_START[:10]
+    entries = []
+    for entry in store.list_paper_entries(limit):
+        created = str(entry.get("created_at") or "")[:10]
+        tagged = dict(entry)
+        tagged["paper_version"] = "v2" if created >= v2_since else "v1"
+        entries.append(tagged)
     return {
         "mode": "paper",
         "summary": store.paper_summary(PAPER_POLICY.starting_bankroll),
@@ -2192,7 +2199,8 @@ async def paper_dashboard(limit: int = Query(100, ge=1, le=500)):
             PAPER_POLICY.starting_bankroll,
             since=PAPER_V2_START,
         ),
-        "entries": store.list_paper_entries(limit),
+        "v2_start": v2_since,
+        "entries": entries,
         "automation": store.get_state("paper_latest") or {
             "status": "waiting",
             "message": "Paper automation has not run yet",
