@@ -188,12 +188,12 @@ export default function PaperTradingPage() {
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
             Capacity near {data?.capacity?.open_near ?? data?.capacity?.open_entries ?? 0}/
-            {data?.capacity?.max_open_entries ?? 20}
+            {data?.capacity?.max_open_entries ?? 6}
             {typeof data?.capacity?.open_far === "number"
-              ? ` · far ${data.capacity.open_far}/${data?.capacity?.max_far_open_entries ?? 5}`
+              ? ` · far ${data.capacity.open_far}/${data?.capacity?.max_far_open_entries ?? 2}`
               : ""}{" "}
             · ${data?.capacity?.daily_staked ?? summary?.daily_staked ?? 0}/
-            {data?.capacity?.daily_stake_cap ?? 200} today
+            {data?.capacity?.daily_stake_cap ?? 60} today
           </p>
         </Card>
       </div>

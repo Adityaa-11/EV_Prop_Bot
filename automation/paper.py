@@ -13,17 +13,18 @@ from typing import Any, Callable
 class PaperPolicy:
     starting_bankroll: float = 200.0
     stake: float = 10.0
-    daily_stake_cap: float = 200.0
-    daily_loss_stop: float = 200.0
-    max_open_entries: int = 20
-    max_far_open_entries: int = 5
+    daily_stake_cap: float = 60.0
+    daily_loss_stop: float = 40.0
+    max_open_entries: int = 6
+    max_far_open_entries: int = 2
     near_lock_hours: float = 48.0
-    min_leg_win: float = 52.0
-    min_leg_books: int = 2
-    max_leg_dispersion: float = 8.0
-    require_line_stability: bool = False
-    excellent_roi: float = -25.0
-    strong_roi: float = -30.0
+    # 2-leg 3x power break-even is ~57.7% per leg; require edge above that.
+    min_leg_win: float = 58.0
+    min_leg_books: int = 3
+    max_leg_dispersion: float = 4.0
+    require_line_stability: bool = True
+    excellent_roi: float = 8.0
+    strong_roi: float = 5.0
     strong_lock_minutes: int = 30
 
 

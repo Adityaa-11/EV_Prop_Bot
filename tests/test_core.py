@@ -112,7 +112,7 @@ class CacheTests(unittest.TestCase):
 
 
 class PaperEntryTests(unittest.TestCase):
-    def test_spray_entry_fires_without_line_stability(self):
+    def test_spray_52_percent_legs_are_rejected(self):
         now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)
         game_time = (now + timedelta(hours=2)).isoformat()
         plays = [
@@ -121,16 +121,16 @@ class PaperEntryTests(unittest.TestCase):
         ]
         result = build_paper_entries(
             plays,
-            stability_for=lambda _: {"stable": False},
+            stability_for=lambda _: {"stable": True},
             policy=PaperPolicy(),
             daily_staked=0,
             open_entries=0,
             now=now,
         )
-        self.assertEqual(len(result["entries"]), 1)
-        self.assertEqual(result["entries"][0]["tier"], "excellent")
+        self.assertEqual(result["entries"], [])
+        self.assertEqual(result["reason"], "no_qualifying_entry")
 
-    def test_excellent_entry_is_created_on_first_scan(self):
+    def test_excellent_entry_requires_stable_high_edge_legs(self):
         now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)
         game_time = (now + timedelta(hours=2)).isoformat()
         plays = [
@@ -139,7 +139,7 @@ class PaperEntryTests(unittest.TestCase):
         ]
         result = build_paper_entries(
             plays,
-            stability_for=lambda _: {"stable": False},
+            stability_for=lambda _: {"stable": True},
             policy=PaperPolicy(),
             daily_staked=0,
             open_entries=0,
@@ -147,7 +147,7 @@ class PaperEntryTests(unittest.TestCase):
         )
         self.assertEqual(len(result["entries"]), 1)
         self.assertEqual(result["entries"][0]["tier"], "excellent")
-        self.assertGreater(result["entries"][0]["expected_roi"], 0)
+        self.assertGreaterEqual(result["entries"][0]["expected_roi"], 8)
 
     def test_strict_policy_still_requires_stability(self):
         now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)
@@ -156,18 +156,10 @@ class PaperEntryTests(unittest.TestCase):
             paper_play("one", "Player One", "event-1", 62, 3, 2, game_time),
             paper_play("two", "Player Two", "event-2", 62, 3, 2, game_time),
         ]
-        strict = PaperPolicy(
-            min_leg_win=57,
-            min_leg_books=3,
-            max_leg_dispersion=3,
-            require_line_stability=True,
-            excellent_roi=10,
-            strong_roi=5,
-        )
         result = build_paper_entries(
             plays,
             stability_for=lambda _: {"stable": False},
-            policy=strict,
+            policy=PaperPolicy(),
             daily_staked=0,
             open_entries=0,
             now=now,
@@ -183,7 +175,7 @@ class PaperEntryTests(unittest.TestCase):
         ]
         result = build_paper_entries(
             plays,
-            stability_for=lambda _: {"stable": False},
+            stability_for=lambda _: {"stable": True},
             policy=PaperPolicy(),
             daily_staked=0,
             open_entries=0,
@@ -196,12 +188,12 @@ class PaperEntryTests(unittest.TestCase):
         now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)
         far_time = (now + timedelta(hours=72)).isoformat()
         plays = [
-            paper_play("one", "Player One", "event-1", 55, 2, 4, far_time),
-            paper_play("two", "Player Two", "event-2", 55, 2, 4, far_time),
+            paper_play("one", "Player One", "event-1", 62, 3, 2, far_time),
+            paper_play("two", "Player Two", "event-2", 62, 3, 2, far_time),
         ]
         result = build_paper_entries(
             plays,
-            stability_for=lambda _: {"stable": False},
+            stability_for=lambda _: {"stable": True},
             policy=PaperPolicy(max_open_entries=20, max_far_open_entries=5),
             daily_staked=0,
             open_near=20,
@@ -236,7 +228,7 @@ class PaperEntryTests(unittest.TestCase):
     def test_risk_capacity_never_forces_an_entry(self):
         result = build_paper_entries(
             [],
-            stability_for=lambda _: {"stable": False},
+            stability_for=lambda _: {"stable": True},
             policy=PaperPolicy(daily_stake_cap=30),
             daily_staked=30,
             open_entries=0,
