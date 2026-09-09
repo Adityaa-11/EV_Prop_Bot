@@ -18,8 +18,8 @@ class PaperPolicy:
     max_open_entries: int = 6
     max_far_open_entries: int = 2
     near_lock_hours: float = 48.0
-    # 2-leg 3x power break-even is ~57.7% per leg; require edge above that.
-    min_leg_win: float = 58.0
+    # 2-leg 3x power break-even is ~57.7% per leg; 55 keeps mild edge over spray (52).
+    min_leg_win: float = 55.0
     min_leg_books: int = 3
     max_leg_dispersion: float = 4.0
     require_line_stability: bool = False
