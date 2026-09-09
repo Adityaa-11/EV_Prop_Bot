@@ -285,23 +285,34 @@ export default function PaperTradingPage() {
                         ? "n/a"
                         : "pending"
                       : `${leg.line_clv > 0 ? "+" : ""}${leg.line_clv}`
-                  const actualLabel =
-                    leg.actual !== null && leg.actual !== undefined
-                      ? String(leg.actual)
-                      : entry.status === "settled"
-                        ? "—"
-                        : "pending"
+                  const hasActual = leg.actual !== null && leg.actual !== undefined
+                  const actualLabel = hasActual
+                    ? String(leg.actual)
+                    : entry.status === "settled"
+                      ? "—"
+                      : "pending"
                   return (
                   <div key={leg.candidate_id} className="rounded-lg border p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="font-semibold">{leg.player_name}</p>
                         <p className="text-sm text-muted-foreground">{leg.stat_type}</p>
+                        <p className="mt-2 text-sm font-medium">
+                          {leg.side} {leg.line}
+                          <span className="mx-1.5 text-muted-foreground">→</span>
+                          {hasActual ? (
+                            <>
+                              ended with{" "}
+                              <span className="font-semibold tabular-nums">{actualLabel}</span>
+                            </>
+                          ) : (
+                            <span className="text-muted-foreground">
+                              {entry.status === "settled" ? "final unavailable" : "awaiting final"}
+                            </span>
+                          )}
+                        </p>
                       </div>
                       <div className="flex flex-col items-end gap-1">
-                        <Badge variant={leg.side === "OVER" ? "default" : "secondary"}>
-                          {leg.side} {leg.line}
-                        </Badge>
                         {leg.result && (
                           <Badge
                             variant={
@@ -317,7 +328,7 @@ export default function PaperTradingPage() {
                         )}
                       </div>
                     </div>
-                    <div className="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-5">
+                    <div className="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
                       <div>
                         <p className="text-muted-foreground">Win probability</p>
                         <p className="mt-1 font-medium">{leg.win_probability.toFixed(2)}%</p>
@@ -325,10 +336,6 @@ export default function PaperTradingPage() {
                       <div>
                         <p className="text-muted-foreground">Books</p>
                         <p className="mt-1 font-medium">{leg.book_count}</p>
-                      </div>
-                      <div>
-                        <p className="text-muted-foreground">Final stat</p>
-                        <p className="mt-1 font-medium">{actualLabel}</p>
                       </div>
                       <div>
                         <p className="text-muted-foreground">Entry → close</p>
