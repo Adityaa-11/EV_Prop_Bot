@@ -272,18 +272,52 @@ export default function PaperTradingPage() {
               </div>
 
               <div className="grid gap-4 p-5 lg:grid-cols-2">
-                {entry.legs.map((leg) => (
+                {entry.legs.map((leg) => {
+                  const closeLabel =
+                    leg.closing_line !== null && leg.closing_line !== undefined
+                      ? String(leg.closing_line)
+                      : leg.closing_unavailable
+                        ? "n/a"
+                        : "pending"
+                  const clvLabel =
+                    leg.line_clv === null || leg.line_clv === undefined
+                      ? leg.closing_unavailable
+                        ? "n/a"
+                        : "pending"
+                      : `${leg.line_clv > 0 ? "+" : ""}${leg.line_clv}`
+                  const actualLabel =
+                    leg.actual !== null && leg.actual !== undefined
+                      ? String(leg.actual)
+                      : entry.status === "settled"
+                        ? "—"
+                        : "pending"
+                  return (
                   <div key={leg.candidate_id} className="rounded-lg border p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="font-semibold">{leg.player_name}</p>
                         <p className="text-sm text-muted-foreground">{leg.stat_type}</p>
                       </div>
-                      <Badge variant={leg.side === "OVER" ? "default" : "secondary"}>
-                        {leg.side} {leg.line}
-                      </Badge>
+                      <div className="flex flex-col items-end gap-1">
+                        <Badge variant={leg.side === "OVER" ? "default" : "secondary"}>
+                          {leg.side} {leg.line}
+                        </Badge>
+                        {leg.result && (
+                          <Badge
+                            variant={
+                              leg.result === "win"
+                                ? "default"
+                                : leg.result === "loss"
+                                  ? "destructive"
+                                  : "outline"
+                            }
+                          >
+                            {leg.result}
+                          </Badge>
+                        )}
+                      </div>
                     </div>
-                    <div className="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+                    <div className="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-5">
                       <div>
                         <p className="text-muted-foreground">Win probability</p>
                         <p className="mt-1 font-medium">{leg.win_probability.toFixed(2)}%</p>
@@ -293,9 +327,13 @@ export default function PaperTradingPage() {
                         <p className="mt-1 font-medium">{leg.book_count}</p>
                       </div>
                       <div>
+                        <p className="text-muted-foreground">Final stat</p>
+                        <p className="mt-1 font-medium">{actualLabel}</p>
+                      </div>
+                      <div>
                         <p className="text-muted-foreground">Entry → close</p>
                         <p className="mt-1 font-medium">
-                          {leg.entry_line} → {leg.closing_line ?? "pending"}
+                          {leg.entry_line} → {closeLabel}
                         </p>
                       </div>
                       <div>
@@ -309,9 +347,7 @@ export default function PaperTradingPage() {
                                 : "text-destructive"
                           }`}
                         >
-                          {leg.line_clv === null || leg.line_clv === undefined
-                            ? "pending"
-                            : `${leg.line_clv > 0 ? "+" : ""}${leg.line_clv}`}
+                          {clvLabel}
                         </p>
                       </div>
                     </div>
@@ -321,8 +357,14 @@ export default function PaperTradingPage() {
                         {leg.probability_clv}%
                       </p>
                     )}
+                    {leg.closing_source === "entry_line_fallback" && (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Close unavailable — showing entry line (no pre-lock re-scan)
+                      </p>
+                    )}
                   </div>
-                ))}
+                  )
+                })}
               </div>
 
               <div className="flex flex-col justify-between gap-2 bg-muted/30 px-5 py-3 text-xs text-muted-foreground sm:flex-row">

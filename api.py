@@ -2182,6 +2182,7 @@ async def run_paper_tick(sport: str) -> dict[str, Any]:
 @app.get("/api/paper")
 async def paper_dashboard(limit: int = Query(100, ge=1, le=500)):
     """Public, read-only paper portfolio used by the live dashboard."""
+    store.backfill_closing_lines_from_observations()
     budget = store.get_state("paper_scan_budget") or {}
     today = datetime.now(timezone.utc).date().isoformat()
     scans_today = int(budget.get("count", 0)) if budget.get("date") == today else 0

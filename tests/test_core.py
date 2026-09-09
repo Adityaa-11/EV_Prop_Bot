@@ -509,6 +509,100 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(leg["line_clv"], -2.0)
             self.assertIsNone(leg["probability_clv"])
 
+    def test_freeze_backfills_closing_line_from_entry_when_missing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = PipelineStore(str(Path(directory) / "test.db"))
+            entry = {
+                "id": "paper-close-fallback",
+                "fingerprint": "fingerprint-close-fallback",
+                "platform": "underdog",
+                "sport": "MLB",
+                "tier": "excellent",
+                "stake": 10,
+                "expected_roi": 12,
+                "potential_payout": 30,
+                "lock_time": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "legs": [
+                    {
+                        "candidate_id": "candidate-fallback",
+                        "player_name": "Fallback Player",
+                        "stat_type": "Total Bases",
+                        "market_key": "batter_total_bases",
+                        "side": "UNDER",
+                        "line": 1.5,
+                        "entry_line": 1.5,
+                        "win_probability": 58,
+                        "closing_line": None,
+                        "line_clv": None,
+                    }
+                ],
+            }
+            store.create_paper_entry(entry)
+            store.freeze_closing_lines_past_lock()
+            leg = store.list_paper_entries()[0]["legs"][0]
+            self.assertEqual(leg["closing_line"], 1.5)
+            self.assertEqual(leg["line_clv"], 0.0)
+            self.assertTrue(leg["closing_frozen"])
+            self.assertEqual(leg["closing_source"], "entry_line_fallback")
+
+    def test_backfill_closing_line_from_observation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = PipelineStore(str(Path(directory) / "test.db"))
+            lock_time = datetime.now(timezone.utc) + timedelta(hours=2)
+            entry = {
+                "id": "paper-obs-close",
+                "fingerprint": "fingerprint-obs-close",
+                "platform": "underdog",
+                "sport": "MLB",
+                "tier": "excellent",
+                "stake": 10,
+                "expected_roi": 12,
+                "potential_payout": 30,
+                "lock_time": lock_time.isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "legs": [
+                    {
+                        "candidate_id": "candidate-obs",
+                        "player_name": "Obs Player",
+                        "stat_type": "Hits",
+                        "market_key": "batter_hits",
+                        "side": "OVER",
+                        "line": 0.5,
+                        "entry_line": 0.5,
+                        "win_probability": 56,
+                        "closing_line": None,
+                        "line_clv": None,
+                    }
+                ],
+            }
+            store.create_paper_entry(entry)
+            store.record_candidate_observations(
+                [
+                    {
+                        "candidate_id": "candidate-obs",
+                        "recommended_play": "OVER",
+                        "win_probability": 57,
+                        "prop": {
+                            "platform": "underdog",
+                            "sport": "MLB",
+                            "event_id": "evt",
+                            "player_name": "Obs Player",
+                            "market_key": "batter_hits",
+                            "line": 1.5,
+                            "game_time": lock_time.isoformat(),
+                        },
+                        "consensus": {"book_count": 4, "dispersion": 1},
+                        "sharp_odds": {"market": "batter_hits"},
+                    }
+                ]
+            )
+            self.assertEqual(store.backfill_closing_lines_from_observations(), 1)
+            leg = store.list_paper_entries()[0]["legs"][0]
+            self.assertEqual(leg["closing_line"], 1.5)
+            self.assertEqual(leg["line_clv"], 1.0)
+            self.assertEqual(leg["closing_source"], "candidate_observation")
+
 
 class PrizePicksIngestionTests(unittest.IsolatedAsyncioTestCase):
     async def test_discovers_supported_markets_before_odds_request(self):

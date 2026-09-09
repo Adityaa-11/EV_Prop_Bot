@@ -309,9 +309,47 @@ class PipelineStore:
                 rows,
             )
 
+    @staticmethod
+    def _apply_closing_snapshot(
+        leg: dict[str, Any],
+        *,
+        closing_line: float,
+        closing_probability: float | None = None,
+        observed_at: str | None = None,
+    ) -> None:
+        entry_line = float(leg.get("entry_line", leg.get("line", closing_line)))
+        side = str(leg.get("side", "")).upper()
+        line_clv = (
+            closing_line - entry_line
+            if side == "OVER"
+            else entry_line - closing_line
+        )
+        leg["closing_line"] = closing_line
+        leg["line_clv"] = round(line_clv, 3)
+        leg["closing_unavailable"] = False
+        if observed_at:
+            leg["closing_observed_at"] = observed_at
+        if (
+            closing_probability
+            and abs(closing_line - entry_line) <= 0.001
+        ):
+            leg["closing_probability"] = float(closing_probability)
+            leg["probability_clv"] = round(
+                float(closing_probability) - float(leg.get("win_probability", 0)),
+                2,
+            )
+        else:
+            leg["closing_probability"] = None
+            leg["probability_clv"] = None
+
     def update_open_entry_closing_lines(self, plays: list[dict[str, Any]]) -> int:
         """Apply the latest pregame line/probability observation to open slips."""
         now = datetime.now(timezone.utc)
+        plays_by_candidate = {
+            play.get("candidate_id"): play
+            for play in plays
+            if play.get("candidate_id")
+        }
         updated = 0
         with self._lock, self._connect() as connection:
             rows = connection.execute(
@@ -328,46 +366,107 @@ class PipelineStore:
                 payload = json.loads(row["payload_json"])
                 changed = False
                 for leg in payload.get("legs", []):
-                    for play in plays:
-                        prop = play.get("prop", {})
-                        if prop.get("platform") != row["platform"]:
-                            continue
-                        if prop.get("player_name") != leg.get("player_name"):
-                            continue
-                        if prop.get("market_key") != leg.get("market_key"):
-                            continue
-                        if leg.get("event_id") and prop.get("event_id") != leg.get("event_id"):
-                            continue
+                    play = plays_by_candidate.get(leg.get("candidate_id"))
+                    if play is None:
+                        for candidate in plays:
+                            prop = candidate.get("prop", {})
+                            if prop.get("platform") != row["platform"]:
+                                continue
+                            if prop.get("player_name") != leg.get("player_name"):
+                                continue
+                            if prop.get("market_key") != leg.get("market_key"):
+                                continue
+                            if leg.get("event_id") and prop.get("event_id") != leg.get("event_id"):
+                                continue
+                            play = candidate
+                            break
+                    if play is None:
+                        continue
 
-                        closing_line = float(prop.get("line", leg["entry_line"]))
-                        entry_line = float(leg["entry_line"])
-                        side = leg["side"]
-                        line_clv = (
-                            closing_line - entry_line
-                            if side == "OVER"
-                            else entry_line - closing_line
+                    prop = play.get("prop", {})
+                    closing_line = float(prop.get("line", leg["entry_line"]))
+                    closing_probability = float(
+                        play.get("sharp_odds", {}).get(
+                            "over_probability" if str(leg.get("side", "")).upper() == "OVER" else "under_probability",
+                            0,
                         )
-                        closing_probability = float(
-                            play.get("sharp_odds", {}).get(
-                                "over_probability" if side == "OVER" else "under_probability",
-                                0,
-                            )
+                        or 0
+                    )
+                    self._apply_closing_snapshot(
+                        leg,
+                        closing_line=closing_line,
+                        closing_probability=closing_probability or None,
+                        observed_at=now.isoformat(),
+                    )
+                    changed = True
+
+                if changed:
+                    connection.execute(
+                        "UPDATE paper_entries SET payload_json = ? WHERE id = ?",
+                        (
+                            json.dumps(payload, separators=(",", ":"), default=str),
+                            row["id"],
+                        ),
+                    )
+                    updated += 1
+        return updated
+
+    def backfill_closing_lines_from_observations(self) -> int:
+        """Fill missing closes from observations, else entry line after lock."""
+        now = datetime.now(timezone.utc)
+        updated = 0
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id, payload_json, lock_time FROM paper_entries"
+            ).fetchall()
+            for row in rows:
+                try:
+                    lock_time = datetime.fromisoformat(row["lock_time"])
+                except (TypeError, ValueError):
+                    continue
+                payload = json.loads(row["payload_json"])
+                changed = False
+                for leg in payload.get("legs", []):
+                    if leg.get("closing_line") is not None:
+                        continue
+                    candidate_id = leg.get("candidate_id")
+                    observation = None
+                    if candidate_id:
+                        observation = connection.execute(
+                            """
+                            SELECT line, win_probability, observed_at
+                            FROM candidate_observations
+                            WHERE candidate_id = ? AND observed_at <= ?
+                            ORDER BY id DESC
+                            LIMIT 1
+                            """,
+                            (candidate_id, lock_time.isoformat()),
+                        ).fetchone()
+                    if observation is not None:
+                        self._apply_closing_snapshot(
+                            leg,
+                            closing_line=float(observation["line"]),
+                            closing_probability=float(observation["win_probability"] or 0) or None,
+                            observed_at=observation["observed_at"],
                         )
-                        leg["closing_line"] = closing_line
-                        leg["line_clv"] = round(line_clv, 3)
-                        if abs(closing_line - entry_line) <= 0.001 and closing_probability:
-                            leg["closing_probability"] = closing_probability
-                            leg["probability_clv"] = round(
-                                closing_probability - float(leg["win_probability"]),
-                                2,
-                            )
-                        else:
-                            leg["closing_probability"] = None
-                            leg["probability_clv"] = None
-                        leg["closing_observed_at"] = now.isoformat()
+                        leg["closing_source"] = "candidate_observation"
                         changed = True
-                        break
+                        continue
 
+                    # After lock, never leave the UI stuck on "pending".
+                    if lock_time <= now:
+                        entry_line = leg.get("entry_line", leg.get("line"))
+                        if entry_line is None:
+                            continue
+                        self._apply_closing_snapshot(
+                            leg,
+                            closing_line=float(entry_line),
+                            closing_probability=float(leg.get("win_probability") or 0) or None,
+                            observed_at=lock_time.isoformat(),
+                        )
+                        leg["closing_source"] = "entry_line_fallback"
+                        leg["closing_frozen"] = True
+                        changed = True
                 if changed:
                     connection.execute(
                         "UPDATE paper_entries SET payload_json = ? WHERE id = ?",
@@ -912,6 +1011,7 @@ class PipelineStore:
 
     def freeze_closing_lines_past_lock(self) -> int:
         """Mark closing lines as frozen once lock time has passed."""
+        self.backfill_closing_lines_from_observations()
         now = datetime.now(timezone.utc)
         updated = 0
         with self._lock, self._connect() as connection:
@@ -931,9 +1031,20 @@ class PipelineStore:
                     if leg.get("closing_frozen"):
                         continue
                     if leg.get("closing_line") is None:
-                        leg["closing_line"] = None
-                        leg["line_clv"] = None
-                        leg["closing_unavailable"] = True
+                        # Last resort: treat entry line as the only observed close.
+                        entry_line = leg.get("entry_line", leg.get("line"))
+                        if entry_line is not None:
+                            self._apply_closing_snapshot(
+                                leg,
+                                closing_line=float(entry_line),
+                                closing_probability=float(leg.get("win_probability") or 0) or None,
+                                observed_at=lock_time.isoformat(),
+                            )
+                            leg["closing_source"] = "entry_line_fallback"
+                        else:
+                            leg["closing_line"] = None
+                            leg["line_clv"] = None
+                            leg["closing_unavailable"] = True
                     leg["closing_frozen"] = True
                     changed = True
                 if changed:

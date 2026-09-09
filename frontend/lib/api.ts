@@ -106,6 +106,11 @@ export interface PaperLeg {
   line_clv: number | null
   closing_probability?: number | null
   probability_clv?: number | null
+  closing_unavailable?: boolean | null
+  closing_source?: string | null
+  actual?: number | null
+  result?: "win" | "loss" | "push" | "void" | null
+  reason?: string | null
 }
 
 export interface PaperEntry {
