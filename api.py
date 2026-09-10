@@ -137,7 +137,7 @@ LIVE_ENTRY_POLICY = PaperPolicy(
     excellent_roi=float(os.getenv("LIVE_EXCELLENT_ROI", "10")),
     strong_roi=float(os.getenv("LIVE_STRONG_ROI", "5")),
 )
-PAPER_DAILY_SCAN_CAP = int(os.getenv("PAPER_DAILY_SCAN_CAP", "36"))
+PAPER_DAILY_SCAN_CAP = int(os.getenv("PAPER_DAILY_SCAN_CAP", "48"))
 PAPER_V2_START = os.getenv("PAPER_V2_START", "2026-09-04")
 PAPER_SCHEDULER_ENABLED = os.getenv("PAPER_SCHEDULER_ENABLED", "false").lower() in {
     "1",
