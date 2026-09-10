@@ -1111,7 +1111,11 @@ async def fetch_prizepicks(session: aiohttp.ClientSession, sport: str) -> list[P
 
 
 async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Prop]:
-    """Fetch Underdog props; fall back to Odds API DFS when direct API is blocked."""
+    """Fetch Underdog props from their public board API (no Odds API credits).
+
+    Underdog retired ``/beta/v6/over_under_lines`` with HTTP 426; the live board is
+    now ``/v1/over_under_lines``. Odds API DFS remains a last-resort fallback only.
+    """
     sport_l = sport.lower()
     target_sport = UD_SPORTS.get(sport_l)
     if not target_sport:
@@ -1121,14 +1125,16 @@ async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Pro
     # (e.g. mls maps to Underdog FIFA but still tags props as MLS).
     prop_sport = sport_l.upper()
 
-    url = "https://api.underdogfantasy.com/beta/v6/over_under_lines"
+    urls = [
+        "https://api.underdogfantasy.com/v1/over_under_lines",
+        "https://api.underdogfantasy.com/beta/v6/over_under_lines",
+    ]
     headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         "Accept": "application/json",
         "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate",
-        "Origin": "https://underdogfantasy.com",
-        "Referer": "https://underdogfantasy.com/",
+        "Origin": "https://app.underdogsports.com",
+        "Referer": "https://app.underdogsports.com/",
     }
 
     async def _odds_api_fallback(reason: str) -> list[Prop]:
@@ -1140,85 +1146,76 @@ async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Pro
             print(f"[Underdog] Odds API DFS also returned 0 props for {prop_sport}")
         return props
 
-    try:
-        async with session.get(url, headers=headers, timeout=30) as resp:
-            print(f"[Underdog] API response status: {resp.status}")
-            if resp.status != 200:
-                return await _odds_api_fallback(f"status {resp.status}")
+    def _parse_board(data: dict[str, Any]) -> list[Prop]:
+        games = {g["id"]: g for g in data.get("games", [])}
+        appearances = {a["id"]: a for a in data.get("appearances", [])}
+        players = {p["id"]: p for p in data.get("players", [])}
+        print(
+            f"[Underdog] Found {len(games)} games, {len(appearances)} appearances, {len(players)} players"
+        )
+        lines = data.get("over_under_lines", [])
+        print(f"[Underdog] Found {len(lines)} over_under_lines")
 
-            data = await resp.json()
-
-            # Build lookup dictionaries
-            # games[].id is numeric, sport_id is string like "NBA"
-            games = {g["id"]: g for g in data.get("games", [])}
-            # appearances[].id is UUID string, has match_id (numeric) and player_id (UUID)
-            appearances = {a["id"]: a for a in data.get("appearances", [])}
-            # players[].id is UUID string
-            players = {p["id"]: p for p in data.get("players", [])}
-
-            print(f"[Underdog] Found {len(games)} games, {len(appearances)} appearances, {len(players)} players")
-
-            # Get all over_under_lines
-            lines = data.get("over_under_lines", [])
-            print(f"[Underdog] Found {len(lines)} over_under_lines")
-
-            props = []
-            for line in lines:
-                try:
-                    # Get the over_under object which contains appearance_stat
-                    ou = line.get("over_under", {})
-                    app_stat = ou.get("appearance_stat", {})
-
-                    # Get appearance_id from appearance_stat (it's like "uuid-uuid")
-                    app_id = app_stat.get("appearance_id")
-                    app = appearances.get(app_id, {})
-
-                    # Get game via match_id from appearance
-                    match_id = app.get("match_id")
-                    game = games.get(match_id, {})
-
-                    # Filter by sport - game.sport_id is a string like "NBA"
-                    game_sport = game.get("sport_id", "")
-                    if game_sport != target_sport:
-                        continue
-
-                    # Get player info via player_id from appearance
-                    player_id = app.get("player_id")
-                    player = players.get(player_id, {})
-
-                    # Get stat type from appearance_stat
-                    stat_type = (app_stat.get("display_stat") or app_stat.get("stat") or "").strip()
-
-                    # Get line value - it's a STRING in the API!
-                    stat_value = line.get("stat_value")
-
-                    if stat_value is not None and player:
-                        name = f"{player.get('first_name', '')} {player.get('last_name', '')}".strip()
-
-                        if name:
-                            # Get team from game title (e.g., "MIL @ BOS" -> "MIL")
-                            game_title = game.get("title", "") or game.get("abbreviated_title", "")
-                            team = game_title.split(" @ ")[0] if " @ " in game_title else ""
-
-                            props.append(Prop(
-                                id=f"ud_{line.get('id', '')}",
-                                player_name=name,
-                                team=team,
-                                sport=prop_sport,
-                                stat_type=stat_type,
-                                platform="underdog",
-                                line=float(stat_value),  # Convert string to float
-                                game_time=game.get("scheduled_at", ""),
-                            ))
-                except Exception:
-                    # Skip this line if there's an error parsing it
+        props: list[Prop] = []
+        for line in lines:
+            try:
+                ou = line.get("over_under", {})
+                app_stat = ou.get("appearance_stat", {})
+                app_id = app_stat.get("appearance_id")
+                app = appearances.get(app_id, {})
+                match_id = app.get("match_id")
+                game = games.get(match_id, {})
+                game_sport = game.get("sport_id", "")
+                if game_sport != target_sport:
                     continue
 
-            if not props:
-                return await _odds_api_fallback("empty direct board")
+                player_id = app.get("player_id")
+                player = players.get(player_id, {})
+                stat_type = (app_stat.get("display_stat") or app_stat.get("stat") or "").strip()
+                stat_value = line.get("stat_value")
+                if stat_value is None or not player:
+                    continue
 
-            print(f"[Underdog] Returning {len(props)} props for {prop_sport} (ud={target_sport})")
-            return props
+                name = f"{player.get('first_name', '')} {player.get('last_name', '')}".strip()
+                if not name:
+                    continue
+
+                game_title = game.get("title", "") or game.get("abbreviated_title", "")
+                team = game_title.split(" @ ")[0] if " @ " in game_title else ""
+                props.append(
+                    Prop(
+                        id=f"ud_{line.get('id', '')}",
+                        player_name=name,
+                        team=team,
+                        sport=prop_sport,
+                        stat_type=stat_type,
+                        platform="underdog",
+                        line=float(stat_value),
+                        game_time=game.get("scheduled_at", ""),
+                    )
+                )
+            except Exception:
+                continue
+        return props
+
+    last_reason = "no_direct_endpoints"
+    try:
+        for url in urls:
+            async with session.get(url, headers=headers, timeout=45) as resp:
+                print(f"[Underdog] API response status: {resp.status} ({url})")
+                if resp.status != 200:
+                    last_reason = f"status {resp.status} on {url}"
+                    continue
+                data = await resp.json()
+                if not isinstance(data, dict):
+                    last_reason = f"invalid payload on {url}"
+                    continue
+                props = _parse_board(data)
+                if props:
+                    print(f"[Underdog] Returning {len(props)} props for {prop_sport} (ud={target_sport})")
+                    return props
+                last_reason = f"empty board on {url}"
+        return await _odds_api_fallback(last_reason)
     except Exception as e:
         print(f"[Underdog] Error: {e}")
         import traceback
