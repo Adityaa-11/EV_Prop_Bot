@@ -373,18 +373,28 @@ app.add_middleware(
 # CONSTANTS
 # =============================================================================
 
-# PrizePicks League IDs (direct API is often blocked; Odds API us_dfs is primary)
+# PrizePicks league IDs from partner-api.prizepicks.com/leagues (Sep 2026).
+# Note: older docs had NFL=2 / MLB=3 — those IDs swapped (2=MLB, 3=WNBA, 9=NFL).
 PP_LEAGUE_IDS = {
     "nba": 7,
-    "nfl": 2,
-    "mlb": 3,
+    "nfl": 9,
+    "mlb": 2,
     "nhl": 8,
-    "ncaab": 10,
-    "ncaaf": 4,
-    "soccer": 17,
-    "mls": 17,
-    "epl": 17,
+    "wnba": 3,
+    "ncaab": 20,  # CBB board
+    "ncaaf": 15,  # CFB board
+    "cfl": 11,
+    "soccer": 82,
+    "mls": 6,
+    "epl": 14,
 }
+
+# Prefer partner-api (no PerimeterX). Main api.prizepicks.com still returns captcha.
+PP_PROJECTION_HOSTS = (
+    "https://partner-api.prizepicks.com",
+    "https://api.prizepicks.com",
+)
+_pp_direct_sem = asyncio.Semaphore(2)
 
 # Underdog sport_id values observed on /beta/v6/over_under_lines
 UD_SPORTS = {
@@ -709,63 +719,137 @@ class GameSummary(BaseModel):
 # PLATFORM FETCHERS
 # =============================================================================
 
-async def fetch_prizepicks_direct(session: aiohttp.ClientSession, sport: str) -> list[Prop]:
-    """Fetch props from PrizePicks API."""
+def _parse_prizepicks_board(data: dict[str, Any], sport: str) -> list[Prop]:
+    """Parse PrizePicks JSON:API projections into Prop rows (standard More/Less only)."""
+    included = {i["id"]: i for i in data.get("included", []) if isinstance(i, dict) and "id" in i}
+    props: list[Prop] = []
+    sport_u = sport.upper()
+
+    for proj in data.get("data", []) or []:
+        try:
+            attrs = proj.get("attributes") or {}
+            odds_type = (attrs.get("odds_type") or "standard").lower()
+            # Goblin/demon have different payouts / often one-sided; skip for EV matching.
+            if odds_type != "standard":
+                continue
+            if attrs.get("is_live"):
+                continue
+
+            player_id = (
+                ((proj.get("relationships") or {}).get("new_player") or {})
+                .get("data") or {}
+            ).get("id")
+            player_data = (included.get(player_id) or {}).get("attributes") or {}
+            name = (
+                player_data.get("display_name")
+                or player_data.get("name")
+                or "Unknown"
+            )
+            line_score = attrs.get("line_score")
+            if line_score is None:
+                continue
+
+            props.append(
+                Prop(
+                    id=f"pp_{proj.get('id', '')}",
+                    player_name=str(name).strip(),
+                    team=player_data.get("team", "") or "",
+                    sport=sport_u,
+                    stat_type=attrs.get("stat_type") or attrs.get("stat_display_name") or "",
+                    platform="prizepicks",
+                    line=float(line_score),
+                    game_time=attrs.get("start_time") or "",
+                )
+            )
+        except Exception:
+            continue
+    return props
+
+
+def _prizepicks_payload_blocked(data: Any) -> bool:
+    """True when api.prizepicks.com returns a PerimeterX / captcha interstitial JSON."""
+    if not isinstance(data, dict):
+        return True
+    if "data" in data:
+        return False
+    url = str(data.get("url") or "")
+    return "captcha" in url.lower() or "perimeter" in url.lower()
+
+
+async def fetch_prizepicks_direct(
+    session: aiohttp.ClientSession,
+    sport: str,
+) -> tuple[list[Prop], str | None]:
+    """Fetch props from PrizePicks public board hosts (partner-api first).
+
+    Returns ``(props, source_or_failure_reason)``. ``source`` is a host label on
+    success; on total failure props is empty and the second value is a reason.
+    """
     league_id = PP_LEAGUE_IDS.get(sport.lower())
     if not league_id:
         print(f"[PrizePicks Direct] Unknown sport: {sport}")
-        return []
-    
-    url = f"https://api.prizepicks.com/projections?league_id={league_id}&per_page=250&single_stat=true"
+        return [], f"unknown sport {sport}"
+
     headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/131.0.0.0 Safari/537.36"
+        ),
         "Accept": "application/json",
         "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate",
         "Referer": "https://app.prizepicks.com/",
         "Origin": "https://app.prizepicks.com",
-        "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        "sec-ch-ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": '"macOS"',
         "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors", 
+        "sec-fetch-mode": "cors",
         "sec-fetch-site": "same-site",
     }
-    
-    try:
-        async with session.get(url, headers=headers, timeout=10) as resp:
-            print(f"[PrizePicks Direct] API response status: {resp.status} for {sport.upper()}")
-            if resp.status != 200:
-                print(f"[PrizePicks Direct] Failed - status {resp.status}")
-                return []
-            
-            data = await resp.json()
-            included = {i["id"]: i for i in data.get("included", [])}
-            props = []
-            
-            for proj in data.get("data", []):
-                attrs = proj.get("attributes", {})
-                player_id = proj.get("relationships", {}).get("new_player", {}).get("data", {}).get("id")
-                player_data = included.get(player_id, {}).get("attributes", {})
-                
-                props.append(Prop(
-                    id=f"pp_{proj.get('id', '')}",
-                    player_name=player_data.get("name", "Unknown"),
-                    team=player_data.get("team", ""),
-                    sport=sport.upper(),
-                    stat_type=attrs.get("stat_type", ""),
-                    platform="prizepicks",
-                    line=float(attrs.get("line_score", 0)),
-                    game_time=attrs.get("start_time", ""),
-                ))
-            
-            print(f"[PrizePicks Direct] Got {len(props)} props for {sport.upper()}")
-            return props
-    except Exception as e:
-        print(f"[PrizePicks Direct] Error: {e}")
-        import traceback
-        traceback.print_exc()
-        return []
+
+    last_reason = "no_direct_hosts"
+    query = f"/projections?league_id={league_id}&per_page=250&single_stat=true"
+
+    async with _pp_direct_sem:
+        for host in PP_PROJECTION_HOSTS:
+            url = f"{host}{query}"
+            source = "partner_api" if "partner-api" in host else "api_prizepicks"
+            try:
+                async with session.get(url, headers=headers, timeout=45) as resp:
+                    print(
+                        f"[PrizePicks Direct] {source} status={resp.status} "
+                        f"for {sport.upper()} league_id={league_id}"
+                    )
+                    if resp.status == 429:
+                        last_reason = f"429 on {source}"
+                        continue
+                    if resp.status != 200:
+                        last_reason = f"status {resp.status} on {source}"
+                        continue
+
+                    data = await resp.json(content_type=None)
+                    if _prizepicks_payload_blocked(data):
+                        last_reason = f"captcha/blocked on {source}"
+                        print(f"[PrizePicks Direct] Blocked by anti-bot on {source}")
+                        continue
+                    if not isinstance(data, dict):
+                        last_reason = f"invalid payload on {source}"
+                        continue
+
+                    props = _parse_prizepicks_board(data, sport)
+                    if props:
+                        print(
+                            f"[PrizePicks Direct] Got {len(props)} standard props "
+                            f"for {sport.upper()} via {source}"
+                        )
+                        return props, source
+                    last_reason = f"empty board on {source}"
+            except Exception as exc:  # noqa: BLE001
+                last_reason = f"{type(exc).__name__} on {source}: {exc}"
+                print(f"[PrizePicks Direct] Error on {source}: {exc}")
+
+    return [], last_reason
 
 
 
@@ -1106,44 +1190,64 @@ async def fetch_dfs_props_from_odds_api(
     return props
 
 async def fetch_prizepicks(session: aiohttp.ClientSession, sport: str) -> list[Prop]:
-    """Fetch PrizePicks props via Odds API (direct API is blocked by captcha)."""
-    # NOTE: PrizePicks direct API is blocked by PerimeterX captcha on server requests
-    # Must use Odds API with us_dfs region instead (costs API quota)
+    """Fetch PrizePicks props from partner-api first; Odds API us_dfs is fallback.
 
-    try:
-        props = await fetch_dfs_props_from_odds_api(session, sport, "prizepicks")
-    except Exception as exc:  # noqa: BLE001
-        _record_feed_health(
-            "prizepicks",
-            status="error",
-            source="odds_api_dfs",
-            count=0,
-            detail=str(exc)[:200],
-            sport=sport.upper(),
-        )
-        print(f"[PrizePicks] Error fetching {sport.upper()}: {exc}")
-        return []
+    ``api.prizepicks.com`` remains PerimeterX-gated on server IPs. The undocumented
+    ``partner-api.prizepicks.com`` board feed currently returns JSON without captcha
+    (same shape as the app projections API).
+    """
+    prop_sport = sport.upper()
 
-    if props:
-        print(f"[PrizePicks] Got {len(props)} props from Odds API for {sport.upper()}")
+    async def _odds_api_fallback(reason: str) -> list[Prop]:
+        print(f"[PrizePicks] Direct unavailable ({reason}); falling back to Odds API DFS")
+        try:
+            props = await fetch_dfs_props_from_odds_api(session, sport, "prizepicks")
+        except Exception as exc:  # noqa: BLE001
+            _record_feed_health(
+                "prizepicks",
+                status="error",
+                source="odds_api_dfs",
+                count=0,
+                detail=f"{reason}; odds_api={exc}"[:240],
+                sport=prop_sport,
+            )
+            print(f"[PrizePicks] Odds API DFS error for {prop_sport}: {exc}")
+            return []
+
+        if props:
+            print(f"[PrizePicks] Got {len(props)} props from Odds API for {prop_sport}")
+            _record_feed_health(
+                "prizepicks",
+                status="fallback",
+                source="odds_api_dfs",
+                count=len(props),
+                detail=reason,
+                sport=prop_sport,
+            )
+        else:
+            print(f"[PrizePicks] Odds API DFS also returned 0 props for {prop_sport}")
+            _record_feed_health(
+                "prizepicks",
+                status="error",
+                source="odds_api_dfs",
+                count=0,
+                detail=reason,
+                sport=prop_sport,
+            )
+        return props
+
+    props, source_or_reason = await fetch_prizepicks_direct(session, sport)
+    if props and source_or_reason:
         _record_feed_health(
             "prizepicks",
             status="ok",
-            source="odds_api_dfs",
+            source=source_or_reason,
             count=len(props),
-            sport=sport.upper(),
+            sport=prop_sport,
         )
-    else:
-        print(f"[PrizePicks] No props found for {sport.upper()} (Odds API may not have data)")
-        _record_feed_health(
-            "prizepicks",
-            status="empty",
-            source="odds_api_dfs",
-            count=0,
-            detail="no props returned",
-            sport=sport.upper(),
-        )
-    return props
+        return props
+
+    return await _odds_api_fallback(source_or_reason or "direct empty")
 
 
 async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Prop]:
@@ -2110,7 +2214,7 @@ async def _alert_scan_board_health(
             f"No PrizePicks candidates · {sport.upper()}",
             (
                 f"Scan produced {underdog_count} Underdog play(s) but **0** PrizePicks. "
-                "PP still depends on Odds API us_dfs."
+                "Check PrizePicks partner-api / Odds API fallback feed health."
             ),
         )
 

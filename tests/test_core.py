@@ -8,10 +8,13 @@ from automation import PaperPolicy, build_paper_entries, compute_paper_capacity,
 from api import (
     DataCache,
     Prop,
+    _parse_prizepicks_board,
+    _prizepicks_payload_blocked,
     build_consensus,
     calculate_entry_ev,
     canonical_market_key,
     fetch_dfs_props_from_odds_api,
+    fetch_prizepicks,
 )
 from storage import PipelineStore
 
@@ -669,6 +672,144 @@ class PrizePicksIngestionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(props), 1)
         self.assertEqual(props[0].market_key, "batter_hits")
         self.assertEqual(props[0].event_id, "event-1")
+
+
+class PrizePicksDirectFeedTests(unittest.IsolatedAsyncioTestCase):
+    def test_parse_board_keeps_standard_only(self):
+        payload = {
+            "data": [
+                {
+                    "id": "1",
+                    "attributes": {
+                        "stat_type": "Hits",
+                        "line_score": 0.5,
+                        "odds_type": "standard",
+                        "start_time": "2026-09-10T20:00:00Z",
+                        "is_live": False,
+                    },
+                    "relationships": {"new_player": {"data": {"id": "p1"}}},
+                },
+                {
+                    "id": "2",
+                    "attributes": {
+                        "stat_type": "Hits",
+                        "line_score": 1.5,
+                        "odds_type": "demon",
+                        "start_time": "2026-09-10T20:00:00Z",
+                        "is_live": False,
+                    },
+                    "relationships": {"new_player": {"data": {"id": "p1"}}},
+                },
+            ],
+            "included": [
+                {
+                    "id": "p1",
+                    "type": "new_player",
+                    "attributes": {"display_name": "Sample Batter", "team": "NYY"},
+                }
+            ],
+        }
+        props = _parse_prizepicks_board(payload, "mlb")
+        self.assertEqual(len(props), 1)
+        self.assertEqual(props[0].player_name, "Sample Batter")
+        self.assertEqual(props[0].line, 0.5)
+        self.assertEqual(props[0].platform, "prizepicks")
+
+    def test_captcha_payload_detected(self):
+        self.assertTrue(
+            _prizepicks_payload_blocked(
+                {"url": "https://geo.captcha-delivery.com/interstitial/?cid=abc"}
+            )
+        )
+        self.assertFalse(_prizepicks_payload_blocked({"data": [], "included": []}))
+
+    async def test_fetch_prizepicks_prefers_partner_api(self):
+        board = {
+            "data": [
+                {
+                    "id": "99",
+                    "attributes": {
+                        "stat_type": "Points",
+                        "line_score": 22.5,
+                        "odds_type": "standard",
+                        "start_time": "2026-10-20T19:00:00Z",
+                        "is_live": False,
+                    },
+                    "relationships": {"new_player": {"data": {"id": "np1"}}},
+                }
+            ],
+            "included": [
+                {
+                    "id": "np1",
+                    "type": "new_player",
+                    "attributes": {"display_name": "Jalen Brunson", "team": "NYK"},
+                }
+            ],
+        }
+
+        class FakeResp:
+            def __init__(self, status, payload):
+                self.status = status
+                self._payload = payload
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def json(self, content_type=None):
+                return self._payload
+
+        class FakeSession:
+            def get(self, url, headers=None, timeout=None):
+                self.last_url = url
+                if "partner-api.prizepicks.com" in url:
+                    return FakeResp(200, board)
+                return FakeResp(403, {"url": "https://geo.captcha-delivery.com/x"})
+
+        odds_fallback = AsyncMock(return_value=[])
+        with patch("api.fetch_dfs_props_from_odds_api", new=odds_fallback):
+            props = await fetch_prizepicks(FakeSession(), "nba")
+
+        self.assertEqual(len(props), 1)
+        self.assertEqual(props[0].player_name, "Jalen Brunson")
+        odds_fallback.assert_not_called()
+
+    async def test_fetch_prizepicks_falls_back_when_direct_blocked(self):
+        class FakeResp:
+            status = 403
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def json(self, content_type=None):
+                return {"url": "https://geo.captcha-delivery.com/interstitial/"}
+
+        class FakeSession:
+            def get(self, url, headers=None, timeout=None):
+                return FakeResp()
+
+        fallback_prop = Prop(
+            id="pp_odds",
+            player_name="Fallback Player",
+            team="AAA",
+            sport="MLB",
+            stat_type="Hits",
+            platform="prizepicks",
+            line=0.5,
+        )
+        with patch(
+            "api.fetch_dfs_props_from_odds_api",
+            new=AsyncMock(return_value=[fallback_prop]),
+        ):
+            props = await fetch_prizepicks(FakeSession(), "mlb")
+
+        self.assertEqual(len(props), 1)
+        self.assertEqual(props[0].player_name, "Fallback Player")
 
 
 if __name__ == "__main__":

@@ -18,7 +18,7 @@ A full-stack application to find profitable (+EV) plays on **PrizePicks** and **
 
 - **Frontend**: Next.js dashboard hosted on Vercel
 - **Backend**: FastAPI + Discord bot hosted on Railway
-- **Data Sources**: PrizePicks through The Odds API `us_dfs`, Underdog direct API, sportsbook prices through The Odds API
+- **Data Sources**: PrizePicks via `partner-api.prizepicks.com` (Odds API `us_dfs` fallback), Underdog direct API, sportsbook prices through The Odds API
 - **Scoring**: exact-line, same-event, weighted no-vig sportsbook consensus
 - **Storage**: durable SQLite snapshots and settlement history
 
