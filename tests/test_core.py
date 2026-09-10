@@ -152,6 +152,55 @@ class PaperEntryTests(unittest.TestCase):
         self.assertEqual(result["entries"][0]["tier"], "excellent")
         self.assertGreaterEqual(result["entries"][0]["expected_roi"], 8)
 
+    def test_underdog_juiced_side_scales_payout_and_roi(self):
+        now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)
+        game_time = (now + timedelta(hours=2)).isoformat()
+        fair = paper_play("one", "Player One", "event-1", 65, 3, 2, game_time)
+        juiced = paper_play("two", "Player Two", "event-2", 65, 3, 2, game_time)
+        fair["prop"]["platform"] = "underdog"
+        juiced["prop"]["platform"] = "underdog"
+        juiced["recommended_play"] = "UNDER"
+        juiced["prop"]["under_payout_multiplier"] = 0.9
+        juiced["prop"]["over_payout_multiplier"] = 1.15
+
+        flat = build_paper_entries(
+            [
+                paper_play("one", "Player One", "event-1", 65, 3, 2, game_time)
+                | {"prop": {**fair["prop"], "under_payout_multiplier": 1.0, "over_payout_multiplier": 1.0}},
+                paper_play("two", "Player Two", "event-2", 65, 3, 2, game_time)
+                | {
+                    "prop": {
+                        **juiced["prop"],
+                        "under_payout_multiplier": 1.0,
+                        "over_payout_multiplier": 1.0,
+                    },
+                    "recommended_play": "UNDER",
+                },
+            ],
+            stability_for=lambda _: {"stable": True},
+            policy=PaperPolicy(),
+            daily_staked=0,
+            open_entries=0,
+            now=now,
+        )
+        result = build_paper_entries(
+            [fair, juiced],
+            stability_for=lambda _: {"stable": True},
+            policy=PaperPolicy(),
+            daily_staked=0,
+            open_entries=0,
+            now=now,
+        )
+        self.assertEqual(len(result["entries"]), 1)
+        self.assertEqual(len(flat["entries"]), 1)
+        entry = result["entries"][0]
+        # Base 3x * 1.0 * 0.9 = 2.7x payout.
+        self.assertAlmostEqual(entry["payout_multiplier"], 2.7, places=3)
+        self.assertAlmostEqual(entry["potential_payout"], 27.0, places=2)
+        self.assertLess(entry["expected_roi"], flat["entries"][0]["expected_roi"])
+        under_leg = next(leg for leg in entry["legs"] if leg["side"] == "UNDER")
+        self.assertEqual(under_leg["payout_multiplier"], 0.9)
+
     def test_optional_stability_flag_still_blocks_unstable_lines(self):
         now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)
         game_time = (now + timedelta(hours=2)).isoformat()

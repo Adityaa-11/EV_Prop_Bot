@@ -51,6 +51,36 @@ def _entry_roi(probabilities: list[float], payout_multiplier: float) -> float:
     return (win_probability * payout_multiplier - 1) * 100
 
 
+def _side_payout_multiplier(play: dict[str, Any]) -> float:
+    """Return Underdog-style per-side payout scale for the recommended leg."""
+    prop = play.get("prop") or {}
+    side = str(play.get("recommended_play") or "").upper()
+    raw = (
+        prop.get("over_payout_multiplier")
+        if side == "OVER"
+        else prop.get("under_payout_multiplier")
+        if side == "UNDER"
+        else 1.0
+    )
+    try:
+        value = float(raw if raw is not None else 1.0)
+    except (TypeError, ValueError):
+        return 1.0
+    return value if value > 0 else 1.0
+
+
+def _entry_payout_multiplier(base_multiplier: float, legs: tuple[dict[str, Any], ...] | list[dict[str, Any]]) -> float:
+    """Scale the platform base payout by each selected side's payout_multiplier.
+
+    Equal-odds Underdog/PrizePicks sides use 1.0, so this stays at the classic
+    2-leg 3x. Juiced chalk (<1) and plus-money sides (>1) adjust ROI honestly.
+    """
+    scaled = float(base_multiplier)
+    for leg in legs:
+        scaled *= _side_payout_multiplier(leg)
+    return scaled
+
+
 def _leg_tier(play: dict[str, Any], policy: PaperPolicy) -> str | None:
     consensus = play.get("consensus", {})
     probability = float(play.get("win_probability", 0))
@@ -205,7 +235,8 @@ def build_paper_entries(
             if not _compatible(*legs):
                 continue
             probabilities = [float(leg["win_probability"]) for leg in legs]
-            expected_roi = _entry_roi(probabilities, multiplier)
+            payout_multiplier = _entry_payout_multiplier(multiplier, legs)
+            expected_roi = _entry_roi(probabilities, payout_multiplier)
             lock_times = [
                 parsed
                 for parsed in (_utc_datetime(leg.get("prop", {}).get("game_time")) for leg in legs)
@@ -245,8 +276,8 @@ def build_paper_entries(
                     "tier": tier,
                     "stake": policy.stake,
                     "expected_roi": round(expected_roi, 2),
-                    "potential_payout": round(policy.stake * multiplier, 2),
-                    "payout_multiplier": multiplier,
+                    "potential_payout": round(policy.stake * payout_multiplier, 2),
+                    "payout_multiplier": round(payout_multiplier, 4),
                     "lock_time": lock_time.isoformat(),
                     "created_at": now.isoformat(),
                     "legs": [
@@ -261,6 +292,7 @@ def build_paper_entries(
                             "game_time": leg["prop"].get("game_time"),
                             "win_probability": leg["win_probability"],
                             "book_count": leg.get("consensus", {}).get("book_count", 0),
+                            "payout_multiplier": round(_side_payout_multiplier(leg), 4),
                             "entry_line": leg["prop"]["line"],
                             "closing_line": None,
                             "line_clv": None,

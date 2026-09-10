@@ -652,6 +652,11 @@ class Prop(BaseModel):
     event_id: Optional[str] = None
     market_key: Optional[str] = None
     is_alternate: bool = False
+    # Underdog (and similar) can juice a side; payout is scaled by these.
+    over_payout_multiplier: float = 1.0
+    under_payout_multiplier: float = 1.0
+    over_american_price: Optional[int] = None
+    under_american_price: Optional[int] = None
     captured_at: str = ""
 
 class SharpOdds(BaseModel):
@@ -1313,8 +1318,7 @@ async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Pro
         print(f"[Underdog] Found {len(lines)} over_under_lines")
 
         props: list[Prop] = []
-        skipped_unequal = 0
-        skipped_season = 0
+        skipped_incomplete = 0
         for line in lines:
             try:
                 ou = line.get("over_under", {})
@@ -1334,12 +1338,6 @@ async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Pro
                 if stat_value is None or not player:
                     continue
 
-                # Season-long / special markets often use juiced sides with
-                # payout_multiplier != 1.0 (smaller "dividends" than standard pick'em).
-                if "season" in stat_type.lower():
-                    skipped_season += 1
-                    continue
-
                 options_by_choice = {
                     str(option.get("choice") or "").lower(): option
                     for option in (line.get("options") or [])
@@ -1347,18 +1345,26 @@ async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Pro
                 higher = options_by_choice.get("higher") or options_by_choice.get("over")
                 lower = options_by_choice.get("lower") or options_by_choice.get("under")
                 if not higher or not lower:
-                    skipped_unequal += 1
+                    skipped_incomplete += 1
                     continue
                 try:
-                    higher_mult = float(higher.get("payout_multiplier") or 0)
-                    lower_mult = float(lower.get("payout_multiplier") or 0)
+                    higher_mult = float(higher.get("payout_multiplier") or 1.0)
+                    lower_mult = float(lower.get("payout_multiplier") or 1.0)
                 except (TypeError, ValueError):
-                    skipped_unequal += 1
-                    continue
-                # Standard equal-odds style pick'em only. Juiced chalk sides pay <1.0x.
-                if abs(higher_mult - 1.0) > 0.01 or abs(lower_mult - 1.0) > 0.01:
-                    skipped_unequal += 1
-                    continue
+                    higher_mult, lower_mult = 1.0, 1.0
+                if higher_mult <= 0:
+                    higher_mult = 1.0
+                if lower_mult <= 0:
+                    lower_mult = 1.0
+
+                def _american(option: dict[str, Any]) -> int | None:
+                    raw = option.get("american_price")
+                    if raw is None:
+                        return None
+                    try:
+                        return int(float(str(raw).replace("+", "")))
+                    except (TypeError, ValueError):
+                        return None
 
                 name = f"{player.get('first_name', '')} {player.get('last_name', '')}".strip()
                 if not name:
@@ -1376,15 +1382,16 @@ async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Pro
                         platform="underdog",
                         line=float(stat_value),
                         game_time=game.get("scheduled_at", ""),
+                        over_payout_multiplier=higher_mult,
+                        under_payout_multiplier=lower_mult,
+                        over_american_price=_american(higher),
+                        under_american_price=_american(lower),
                     )
                 )
             except Exception:
                 continue
-        if skipped_unequal or skipped_season:
-            print(
-                f"[Underdog] Filtered non-standard lines: "
-                f"unequal_payout={skipped_unequal} season={skipped_season}"
-            )
+        if skipped_incomplete:
+            print(f"[Underdog] Skipped incomplete option pairs: {skipped_incomplete}")
         return props
 
     last_reason = "no_direct_endpoints"
