@@ -37,7 +37,10 @@ from automation import (
     deliver_paper_entry,
     deliver_live_status,
     deliver_ops_alert,
+    dry_spell_should_alert,
+    platform_play_counts,
     settle_mlb_entries,
+    should_send_alert,
     void_stale_open_entries,
 )
 
@@ -138,6 +141,11 @@ LIVE_ENTRY_POLICY = PaperPolicy(
     strong_roi=float(os.getenv("LIVE_STRONG_ROI", "5")),
 )
 PAPER_DAILY_SCAN_CAP = int(os.getenv("PAPER_DAILY_SCAN_CAP", "36"))
+PAPER_DRY_SPELL_HOURS = float(os.getenv("PAPER_DRY_SPELL_HOURS", "36"))
+OPS_ALERT_COOLDOWN_HOURS = float(os.getenv("OPS_ALERT_COOLDOWN_HOURS", "6"))
+PAPER_DRY_SPELL_ALERT_COOLDOWN_HOURS = float(
+    os.getenv("PAPER_DRY_SPELL_ALERT_COOLDOWN_HOURS", "12")
+)
 PAPER_V2_START = os.getenv("PAPER_V2_START", "2026-09-04")
 PAPER_SCHEDULER_ENABLED = os.getenv("PAPER_SCHEDULER_ENABLED", "false").lower() in {
     "1",
@@ -1101,12 +1109,40 @@ async def fetch_prizepicks(session: aiohttp.ClientSession, sport: str) -> list[P
     """Fetch PrizePicks props via Odds API (direct API is blocked by captcha)."""
     # NOTE: PrizePicks direct API is blocked by PerimeterX captcha on server requests
     # Must use Odds API with us_dfs region instead (costs API quota)
-    
-    props = await fetch_dfs_props_from_odds_api(session, sport, "prizepicks")
+
+    try:
+        props = await fetch_dfs_props_from_odds_api(session, sport, "prizepicks")
+    except Exception as exc:  # noqa: BLE001
+        _record_feed_health(
+            "prizepicks",
+            status="error",
+            source="odds_api_dfs",
+            count=0,
+            detail=str(exc)[:200],
+            sport=sport.upper(),
+        )
+        print(f"[PrizePicks] Error fetching {sport.upper()}: {exc}")
+        return []
+
     if props:
         print(f"[PrizePicks] Got {len(props)} props from Odds API for {sport.upper()}")
+        _record_feed_health(
+            "prizepicks",
+            status="ok",
+            source="odds_api_dfs",
+            count=len(props),
+            sport=sport.upper(),
+        )
     else:
         print(f"[PrizePicks] No props found for {sport.upper()} (Odds API may not have data)")
+        _record_feed_health(
+            "prizepicks",
+            status="empty",
+            source="odds_api_dfs",
+            count=0,
+            detail="no props returned",
+            sport=sport.upper(),
+        )
     return props
 
 
@@ -1142,8 +1178,24 @@ async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Pro
         props = await fetch_dfs_props_from_odds_api(session, sport, "underdog")
         if props:
             print(f"[Underdog] Got {len(props)} props from Odds API for {prop_sport}")
+            _record_feed_health(
+                "underdog",
+                status="fallback",
+                source="odds_api_dfs",
+                count=len(props),
+                detail=reason,
+                sport=prop_sport,
+            )
         else:
             print(f"[Underdog] Odds API DFS also returned 0 props for {prop_sport}")
+            _record_feed_health(
+                "underdog",
+                status="error",
+                source="odds_api_dfs",
+                count=0,
+                detail=reason,
+                sport=prop_sport,
+            )
         return props
 
     def _parse_board(data: dict[str, Any]) -> list[Prop]:
@@ -1213,6 +1265,13 @@ async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Pro
                 props = _parse_board(data)
                 if props:
                     print(f"[Underdog] Returning {len(props)} props for {prop_sport} (ud={target_sport})")
+                    _record_feed_health(
+                        "underdog",
+                        status="ok",
+                        source="direct_v1" if "/v1/" in url else "direct_beta_v6",
+                        count=len(props),
+                        sport=prop_sport,
+                    )
                     return props
                 last_reason = f"empty board on {url}"
         return await _odds_api_fallback(last_reason)
@@ -1869,14 +1928,191 @@ def _paper_scheduler_status() -> dict[str, Any]:
     return paper_scheduler.status()
 
 
-async def _maybe_ops_alert(message_key: str, title: str, body: str) -> None:
-    today = datetime.now(timezone.utc).date().isoformat()
-    prior = store.get_state(f"ops_alert:{message_key}") or {}
-    if prior.get("date") == today:
-        return
+async def _maybe_ops_alert(
+    message_key: str,
+    title: str,
+    body: str,
+    *,
+    cooldown_hours: float | None = None,
+    color: int = 0xF59E0B,
+) -> bool:
+    """Send an ops Discord alert at most once per cooldown window."""
+    hours = OPS_ALERT_COOLDOWN_HOURS if cooldown_hours is None else cooldown_hours
+    state_key = f"ops_alert:{message_key}"
+    prior = store.get_state(state_key) or {}
+    now = datetime.now(timezone.utc)
+    if not should_send_alert(prior, now=now, cooldown_hours=hours):
+        return False
     async with aiohttp.ClientSession() as session:
-        await deliver_ops_alert(session, title, body)
-    store.set_state(f"ops_alert:{message_key}", {"date": today, "title": title})
+        await deliver_ops_alert(session, title, body, color=color)
+    store.set_state(
+        state_key,
+        {
+            "date": now.date().isoformat(),
+            "sent_at": now.isoformat(),
+            "title": title,
+            "cooldown_hours": hours,
+        },
+    )
+    return True
+
+
+def _record_feed_health(
+    platform: str,
+    *,
+    status: str,
+    source: str,
+    count: int = 0,
+    detail: str | None = None,
+    sport: str | None = None,
+) -> dict[str, Any]:
+    payload = {
+        "platform": platform,
+        "status": status,
+        "source": source,
+        "count": count,
+        "detail": detail,
+        "sport": sport,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+    }
+    store.set_state(f"feed_health:{platform}", payload)
+    return payload
+
+
+def _feed_health_snapshot() -> dict[str, Any]:
+    return {
+        platform: store.get_state(f"feed_health:{platform}") or {"status": "unknown"}
+        for platform in ("underdog", "prizepicks")
+    }
+
+
+def _newest_paper_created_at() -> str | None:
+    entries = store.list_paper_entries(1)
+    if not entries:
+        return None
+    return entries[0].get("created_at")
+
+
+async def _alert_paper_dry_spell() -> None:
+    newest = _newest_paper_created_at()
+    prior = store.get_state("ops_alert:paper_dry_spell") or {}
+    should_alert, elapsed = dry_spell_should_alert(
+        last_entry_created_at=newest,
+        dry_spell_hours=PAPER_DRY_SPELL_HOURS,
+        prior_alert=prior,
+        cooldown_hours=PAPER_DRY_SPELL_ALERT_COOLDOWN_HOURS,
+    )
+    if not should_alert:
+        return
+    if elapsed is None:
+        body = (
+            "No paper slips exist in the ledger yet, or created_at is missing. "
+            "Check feed health and filters."
+        )
+    else:
+        body = (
+            f"No new paper slips for **{elapsed:.1f}h** "
+            f"(threshold {PAPER_DRY_SPELL_HOURS:.0f}h).\n"
+            f"Last slip created_at: `{newest}`\n"
+            f"Feeds: `{json.dumps(_feed_health_snapshot(), default=str)[:700]}`"
+        )
+    await _maybe_ops_alert(
+        "paper_dry_spell",
+        "Paper dry spell — no new slips",
+        body,
+        cooldown_hours=PAPER_DRY_SPELL_ALERT_COOLDOWN_HOURS,
+        color=0xEF4444,
+    )
+
+
+async def _alert_scheduler_cycle(result: dict[str, Any]) -> None:
+    """Post-cycle health alerts so feed/outage issues can't stay silent."""
+    for tick in result.get("ticks") or []:
+        if tick.get("status") != "error":
+            continue
+        sport = str(tick.get("sport") or "unknown").upper()
+        await _maybe_ops_alert(
+            f"scheduler_tick_error:{sport.lower()}",
+            f"Paper scheduler error · {sport}",
+            str(tick.get("message") or "unknown error")[:500],
+            color=0xEF4444,
+        )
+
+    feed = _feed_health_snapshot()
+    underdog = feed.get("underdog") or {}
+    if underdog.get("status") in {"fallback", "error", "empty"}:
+        await _maybe_ops_alert(
+            "feed_underdog_degraded",
+            "Underdog feed degraded",
+            (
+                f"status=`{underdog.get('status')}` source=`{underdog.get('source')}` "
+                f"count={underdog.get('count')} detail=`{underdog.get('detail')}` "
+                f"sport=`{underdog.get('sport')}` checked=`{underdog.get('checked_at')}`"
+            ),
+            color=0xEF4444,
+        )
+    prizepicks = feed.get("prizepicks") or {}
+    if prizepicks.get("status") in {"error", "empty"}:
+        await _maybe_ops_alert(
+            "feed_prizepicks_empty",
+            "PrizePicks feed empty/error",
+            (
+                f"status=`{prizepicks.get('status')}` source=`{prizepicks.get('source')}` "
+                f"count={prizepicks.get('count')} detail=`{prizepicks.get('detail')}` "
+                f"checked=`{prizepicks.get('checked_at')}`"
+            ),
+        )
+
+    await _alert_paper_dry_spell()
+
+
+async def _alert_scan_board_health(
+    *,
+    sport: str,
+    plays: list[dict[str, Any]],
+    scan_error: str | None,
+) -> None:
+    if scan_error:
+        await _maybe_ops_alert(
+            f"scan_error:{sport}",
+            f"Paper scan error · {sport.upper()}",
+            scan_error[:500],
+            color=0xEF4444,
+        )
+        return
+
+    counts = platform_play_counts(plays)
+    underdog_count = int(counts.get("underdog") or 0)
+    prizepicks_count = int(counts.get("prizepicks") or 0)
+    if underdog_count == 0 and prizepicks_count == 0:
+        await _maybe_ops_alert(
+            f"empty_board:{sport}",
+            f"Empty DFS board during scan · {sport.upper()}",
+            (
+                "Paid scan ran with games in the 6h window but returned **0** "
+                "Underdog and PrizePicks candidates. Likely a feed outage or matching failure.\n"
+                f"Feed health: `{json.dumps(_feed_health_snapshot(), default=str)[:700]}`"
+            ),
+            color=0xEF4444,
+        )
+    elif underdog_count == 0:
+        await _maybe_ops_alert(
+            f"empty_underdog:{sport}",
+            f"No Underdog candidates · {sport.upper()}",
+            (
+                f"Scan produced {prizepicks_count} PrizePicks play(s) but **0** Underdog. "
+                "Check Underdog direct/v1 feed health."
+            ),
+        )
+    elif prizepicks_count == 0:
+        await _maybe_ops_alert(
+            f"empty_prizepicks:{sport}",
+            f"No PrizePicks candidates · {sport.upper()}",
+            (
+                f"Scan produced {underdog_count} Underdog play(s) but **0** PrizePicks. "
+                "PP still depends on Odds API us_dfs."
+            ),
+        )
 
 
 def _paper_open_horizon() -> dict[str, int]:
@@ -2088,6 +2324,16 @@ async def run_paper_tick(sport: str) -> dict[str, Any]:
             min_books=_entry_policy_for_mode(_effective_execution_mode()).min_leg_books,
         )
         plays = scan.get("plays", [])
+        scan_error = None
+        if isinstance(scan.get("error"), str):
+            scan_error = scan["error"]
+        elif scan.get("detail"):
+            scan_error = str(scan.get("detail"))[:500]
+        await _alert_scan_board_health(
+            sport=normalized_sport,
+            plays=plays,
+            scan_error=scan_error,
+        )
         store.record_candidate_observations(plays)
         updated_closing_lines = store.update_open_entry_closing_lines(plays)
         store.freeze_closing_lines_past_lock()
@@ -2223,6 +2469,11 @@ async def paper_dashboard(limit: int = Query(100, ge=1, le=500)):
         "delivery_failures": store.delivery_failure_count(),
         "settlement_backlog": store.settlement_backlog_count(),
         "capacity": _paper_capacity_payload(),
+        "feed_health": _feed_health_snapshot(),
+        "dry_spell": {
+            "last_entry_created_at": _newest_paper_created_at(),
+            "threshold_hours": PAPER_DRY_SPELL_HOURS,
+        },
         "execution": {
             "mode": EXECUTION_MODE,
             "live_enabled": LIVE_EXECUTION_ENABLED,
@@ -2408,6 +2659,7 @@ async def start_paper_scheduler() -> None:
         deliver_pending=run_paper_delivery,
         sports=PAPER_SPORTS,
         enabled=PAPER_SCHEDULER_ENABLED,
+        after_cycle=_alert_scheduler_cycle,
     )
     await paper_scheduler.start()
     print(
@@ -2704,6 +2956,11 @@ async def health():
         "paper_quota": {
             "scans_today": scans_today,
             "scan_cap": PAPER_DAILY_SCAN_CAP,
+        },
+        "feed_health": _feed_health_snapshot(),
+        "dry_spell": {
+            "last_entry_created_at": _newest_paper_created_at(),
+            "threshold_hours": PAPER_DRY_SPELL_HOURS,
         },
         "delivery_failures": store.delivery_failure_count(),
         "settlement_backlog": store.settlement_backlog_count(),

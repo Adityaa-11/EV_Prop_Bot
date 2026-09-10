@@ -4,6 +4,11 @@ from .paper import PaperPolicy, build_paper_entries, compute_paper_capacity
 from .delivery import deliver_paper_entry, deliver_ops_alert, deliver_live_status, format_paper_slip
 from .settlement import evaluate_leg, settle_mlb_entries, void_stale_open_entries
 from .scheduler import PaperScheduler
+from .ops_health import (
+    dry_spell_should_alert,
+    platform_play_counts,
+    should_send_alert,
+)
 
 __all__ = [
     "PaperPolicy",
@@ -17,4 +22,7 @@ __all__ = [
     "evaluate_leg",
     "settle_mlb_entries",
     "void_stale_open_entries",
+    "dry_spell_should_alert",
+    "platform_play_counts",
+    "should_send_alert",
 ]

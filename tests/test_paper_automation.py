@@ -125,6 +125,38 @@ class SchedulerHeartbeatTests(unittest.IsolatedAsyncioTestCase):
             deliver.assert_awaited_once()
             settle.assert_awaited_once()
 
+    async def test_after_cycle_hook_runs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = PipelineStore(str(Path(directory) / "after.db"))
+            seen = {}
+
+            async def after(result):
+                seen["ok"] = True
+                seen["created"] = result.get("created_count")
+
+            tick = AsyncMock(
+                return_value={
+                    "status": "waiting",
+                    "message": "no_events_within_six_hours",
+                    "created_count": 0,
+                }
+            )
+            settle = AsyncMock(return_value={"settled": 0, "pending": 0})
+            deliver = AsyncMock(return_value={"sent": 0, "failed": 0, "pending": 0})
+            scheduler = PaperScheduler(
+                store=store,
+                tick_sport=tick,
+                settle_open=settle,
+                deliver_pending=deliver,
+                sports=["mlb"],
+                enabled=True,
+                after_cycle=after,
+            )
+            result = await scheduler.heartbeat_once()
+            self.assertEqual(result["status"], "ok")
+            self.assertTrue(seen.get("ok"))
+            self.assertEqual(seen.get("created"), 0)
+
 
 class MlbSettlementPendingTests(unittest.IsolatedAsyncioTestCase):
     async def test_recent_lock_stays_pending(self):

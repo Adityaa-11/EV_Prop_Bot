@@ -17,6 +17,7 @@ import aiohttp
 PaperTickFn = Callable[[str], Awaitable[dict[str, Any]]]
 SettleFn = Callable[[], Awaitable[dict[str, Any]]]
 DeliverFn = Callable[[], Awaitable[dict[str, Any]]]
+AfterCycleFn = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 class PaperScheduler:
@@ -32,11 +33,13 @@ class PaperScheduler:
         sports: list[str] | None = None,
         heartbeat_seconds: int | None = None,
         enabled: bool | None = None,
+        after_cycle: AfterCycleFn | None = None,
     ):
         self.store = store
         self.tick_sport = tick_sport
         self.settle_open = settle_open
         self.deliver_pending = deliver_pending
+        self.after_cycle = after_cycle
         self.sports = sports or [
             sport.strip().lower()
             for sport in os.getenv(
@@ -131,6 +134,17 @@ class PaperScheduler:
         }
         self.store.set_state("paper_scheduler", result)
         self.store.release_lease("paper_scheduler", owner=self.worker_id)
+        if self.after_cycle is not None:
+            try:
+                await self.after_cycle(result)
+            except Exception as exc:  # noqa: BLE001
+                self.store.set_state(
+                    "paper_health_error",
+                    {
+                        "message": str(exc)[:300],
+                        "checked_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
         return result
 
     async def _loop(self) -> None:
