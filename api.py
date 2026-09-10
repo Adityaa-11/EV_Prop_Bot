@@ -1313,6 +1313,8 @@ async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Pro
         print(f"[Underdog] Found {len(lines)} over_under_lines")
 
         props: list[Prop] = []
+        skipped_unequal = 0
+        skipped_season = 0
         for line in lines:
             try:
                 ou = line.get("over_under", {})
@@ -1330,6 +1332,32 @@ async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Pro
                 stat_type = (app_stat.get("display_stat") or app_stat.get("stat") or "").strip()
                 stat_value = line.get("stat_value")
                 if stat_value is None or not player:
+                    continue
+
+                # Season-long / special markets often use juiced sides with
+                # payout_multiplier != 1.0 (smaller "dividends" than standard pick'em).
+                if "season" in stat_type.lower():
+                    skipped_season += 1
+                    continue
+
+                options_by_choice = {
+                    str(option.get("choice") or "").lower(): option
+                    for option in (line.get("options") or [])
+                }
+                higher = options_by_choice.get("higher") or options_by_choice.get("over")
+                lower = options_by_choice.get("lower") or options_by_choice.get("under")
+                if not higher or not lower:
+                    skipped_unequal += 1
+                    continue
+                try:
+                    higher_mult = float(higher.get("payout_multiplier") or 0)
+                    lower_mult = float(lower.get("payout_multiplier") or 0)
+                except (TypeError, ValueError):
+                    skipped_unequal += 1
+                    continue
+                # Standard equal-odds style pick'em only. Juiced chalk sides pay <1.0x.
+                if abs(higher_mult - 1.0) > 0.01 or abs(lower_mult - 1.0) > 0.01:
+                    skipped_unequal += 1
                     continue
 
                 name = f"{player.get('first_name', '')} {player.get('last_name', '')}".strip()
@@ -1352,6 +1380,11 @@ async def fetch_underdog(session: aiohttp.ClientSession, sport: str) -> list[Pro
                 )
             except Exception:
                 continue
+        if skipped_unequal or skipped_season:
+            print(
+                f"[Underdog] Filtered non-standard lines: "
+                f"unequal_payout={skipped_unequal} season={skipped_season}"
+            )
         return props
 
     last_reason = "no_direct_endpoints"
