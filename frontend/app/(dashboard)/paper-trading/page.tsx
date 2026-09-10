@@ -181,7 +181,7 @@ export default function PaperTradingPage() {
         <Card className="p-4">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">Daily scan budget</p>
           <p className="mt-2 font-semibold">
-            {quota?.scans_today ?? 0} / {quota?.scan_cap ?? 24}
+            {quota?.scans_today ?? 0} / {quota?.scan_cap ?? 200}
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
             {quota?.remaining_scans ?? 0} paid scans remaining today
@@ -194,12 +194,12 @@ export default function PaperTradingPage() {
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
             Capacity near {data?.capacity?.open_near ?? data?.capacity?.open_entries ?? 0}/
-            {data?.capacity?.max_open_entries ?? 6}
+            {data?.capacity?.max_open_entries ?? 50}
             {typeof data?.capacity?.open_far === "number"
-              ? ` · far ${data.capacity.open_far}/${data?.capacity?.max_far_open_entries ?? 2}`
+              ? ` · far ${data.capacity.open_far}/${data?.capacity?.max_far_open_entries ?? 50}`
               : ""}{" "}
             · ${data?.capacity?.daily_staked ?? summary?.daily_staked ?? 0}/
-            {data?.capacity?.daily_stake_cap ?? 60} today
+            {data?.capacity?.daily_stake_cap ?? 1000} today
           </p>
         </Card>
       </div>

@@ -13,10 +13,10 @@ from typing import Any, Callable
 class PaperPolicy:
     starting_bankroll: float = 200.0
     stake: float = 10.0
-    daily_stake_cap: float = 60.0
+    daily_stake_cap: float = 1000.0
     daily_loss_stop: float = 200.0
-    max_open_entries: int = 6
-    max_far_open_entries: int = 2
+    max_open_entries: int = 50
+    max_far_open_entries: int = 50
     near_lock_hours: float = 48.0
     # 2-leg 3x power break-even is ~57.7% per leg; 55 keeps mild edge over spray (52).
     min_leg_win: float = 55.0
