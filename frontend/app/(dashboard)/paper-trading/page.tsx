@@ -381,9 +381,18 @@ export default function PaperTradingPage() {
                     ? `${entry.result} · ${currency.format(entry.profit ?? 0)}`
                     : "Awaiting results"}
                 </span>
-                <span className="flex items-center gap-1">
-                  <Clock className="h-3.5 w-3.5" />
-                  Locks {entry.lock_time ? new Date(entry.lock_time).toLocaleString() : "unknown"}
+                <span className="flex flex-col items-start gap-1 sm:items-end">
+                  <span className="flex items-center gap-1">
+                    <Clock className="h-3.5 w-3.5" />
+                    Placed{" "}
+                    {entry.created_at
+                      ? new Date(entry.created_at).toLocaleString()
+                      : "unknown"}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Clock className="h-3.5 w-3.5" />
+                    Locks {entry.lock_time ? new Date(entry.lock_time).toLocaleString() : "unknown"}
+                  </span>
                 </span>
               </div>
             </Card>
