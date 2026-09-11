@@ -152,6 +152,60 @@ class PaperEntryTests(unittest.TestCase):
         self.assertEqual(result["entries"][0]["tier"], "excellent")
         self.assertGreaterEqual(result["entries"][0]["expected_roi"], 8)
 
+    def test_prefers_higher_roi_and_excellent_before_weaker_slips(self):
+        now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)
+        lock = (now + timedelta(minutes=20)).isoformat()
+        plays = [
+            # Weak strong-tier combo (~5.2% ROI at 59/59) if strong_roi were 5.
+            paper_play("w1", "Weak One", "event-1", 59, 3, 2, lock),
+            paper_play("w2", "Weak Two", "event-2", 59, 3, 2, lock),
+            # Stronger excellent combo.
+            paper_play("s1", "Strong One", "event-3", 65, 3, 2, lock),
+            paper_play("s2", "Strong Two", "event-4", 65, 3, 2, lock),
+        ]
+        result = build_paper_entries(
+            plays,
+            stability_for=lambda _: {"stable": True},
+            policy=PaperPolicy(
+                min_leg_win=55,
+                strong_roi=5,
+                excellent_roi=8,
+                max_entries_per_lock_time=1,
+            ),
+            daily_staked=0,
+            open_entries=0,
+            now=now,
+        )
+        self.assertEqual(len(result["entries"]), 1)
+        entry = result["entries"][0]
+        self.assertEqual(entry["tier"], "excellent")
+        names = {leg["player_name"] for leg in entry["legs"]}
+        self.assertEqual(names, {"Strong One", "Strong Two"})
+
+    def test_caps_entries_sharing_the_same_lock_time(self):
+        now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)
+        lock = (now + timedelta(hours=2)).isoformat()
+        plays = [
+            paper_play("a1", "A One", "event-1", 65, 3, 2, lock),
+            paper_play("a2", "A Two", "event-2", 65, 3, 2, lock),
+            paper_play("b1", "B One", "event-3", 64, 3, 2, lock),
+            paper_play("b2", "B Two", "event-4", 64, 3, 2, lock),
+            paper_play("c1", "C One", "event-5", 63, 3, 2, lock),
+            paper_play("c2", "C Two", "event-6", 63, 3, 2, lock),
+        ]
+        result = build_paper_entries(
+            plays,
+            stability_for=lambda _: {"stable": True},
+            policy=PaperPolicy(max_entries_per_lock_time=2),
+            daily_staked=0,
+            open_entries=0,
+            now=now,
+        )
+        self.assertEqual(len(result["entries"]), 2)
+        rois = [entry["expected_roi"] for entry in result["entries"]]
+        self.assertEqual(rois, sorted(rois, reverse=True))
+
+
     def test_underdog_juiced_side_scales_payout_and_roi(self):
         now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)
         game_time = (now + timedelta(hours=2)).isoformat()
