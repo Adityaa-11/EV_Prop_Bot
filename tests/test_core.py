@@ -9,6 +9,7 @@ from api import (
     DataCache,
     Prop,
     _parse_prizepicks_board,
+    _paper_version_for_created_at,
     _prizepicks_payload_blocked,
     build_consensus,
     calculate_entry_ev,
@@ -43,6 +44,13 @@ class CoreScoringTests(unittest.TestCase):
     def test_alternate_market_normalization(self):
         self.assertEqual(canonical_market_key("batter_hits_alternate"), "batter_hits")
         self.assertEqual(canonical_market_key("batter_hits"), "batter_hits")
+
+    def test_paper_version_eras(self):
+        self.assertEqual(_paper_version_for_created_at("2026-09-03T12:00:00+00:00"), "v1")
+        self.assertEqual(_paper_version_for_created_at("2026-09-04T00:00:00+00:00"), "v2")
+        self.assertEqual(_paper_version_for_created_at("2026-09-10T19:57:54+00:00"), "v2")
+        self.assertEqual(_paper_version_for_created_at("2026-09-11T00:00:00+00:00"), "v3")
+        self.assertEqual(_paper_version_for_created_at("2026-09-12T15:00:00+00:00"), "v3")
 
     def test_consensus_uses_only_exact_line_and_event(self):
         prop = Prop(

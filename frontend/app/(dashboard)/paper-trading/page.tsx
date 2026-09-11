@@ -61,6 +61,7 @@ export default function PaperTradingPage() {
 
   const summary = data?.summary
   const v2 = data?.v2_summary
+  const v3 = data?.v3_summary
   const scheduler = data?.scheduler
   const quota = data?.quota
 
@@ -138,7 +139,7 @@ export default function PaperTradingPage() {
         </Card>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
         <MetricCard
           label="Paper Bankroll"
           value={currency.format(summary?.bankroll ?? 200)}
@@ -160,9 +161,14 @@ export default function PaperTradingPage() {
           detail={`${summary?.entries ?? 0} total simulated slips`}
         />
         <MetricCard
+          label="V3 Results"
+          value={`${v3?.wins ?? 0}-${v3?.losses ?? 0}`}
+          detail={`${currency.format(v3?.profit ?? 0)} · ${v3?.win_rate ?? 0}% WR · ${v3?.voids ?? 0} void · since ${v3?.since ?? data?.v3_start ?? "2026-09-11"}`}
+        />
+        <MetricCard
           label="V2 Results"
           value={`${v2?.wins ?? 0}-${v2?.losses ?? 0}`}
-          detail={`${currency.format(v2?.profit ?? 0)} · ${v2?.win_rate ?? 0}% WR · ${v2?.voids ?? 0} void · since ${v2?.since ?? "2026-09-04"}`}
+          detail={`${currency.format(v2?.profit ?? 0)} · ${v2?.win_rate ?? 0}% WR · since ${v2?.since ?? "2026-09-04"}`}
         />
       </div>
 
@@ -245,7 +251,11 @@ export default function PaperTradingPage() {
           {data.entries.map((entry) => {
             const version =
               entry.paper_version ??
-              ((entry.created_at || "").slice(0, 10) >= (data.v2_start ?? "2026-09-04") ? "v2" : "v1")
+              ((entry.created_at || "").slice(0, 10) >= (data.v3_start ?? "2026-09-11")
+                ? "v3"
+                : (entry.created_at || "").slice(0, 10) >= (data.v2_start ?? "2026-09-04")
+                  ? "v2"
+                  : "v1")
             return (
             <Card key={entry.id} className="overflow-hidden">
               <div className="flex flex-col justify-between gap-3 border-b p-5 sm:flex-row sm:items-center">
@@ -256,7 +266,7 @@ export default function PaperTradingPage() {
                     {entry.tier}
                   </Badge>
                   <Badge variant="secondary">PAPER</Badge>
-                  <Badge variant={version === "v2" ? "default" : "outline"}>
+                  <Badge variant={version === "v3" ? "default" : "outline"}>
                     {version.toUpperCase()}
                   </Badge>
                   <Badge variant={entry.delivery_status === "sent" ? "default" : "outline"}>

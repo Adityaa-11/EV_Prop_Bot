@@ -71,6 +71,7 @@ class DeliveryFormatTests(unittest.TestCase):
         )
         description = payload["embeds"][0]["description"]
         self.assertIn("PAPER — NO REAL WAGER", description)
+        self.assertIn("Version: **V3**", description)
         self.assertIn("paper-1", description)
 
 

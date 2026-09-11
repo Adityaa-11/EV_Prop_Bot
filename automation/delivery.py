@@ -67,6 +67,7 @@ def format_paper_slip(entry: dict[str, Any]) -> dict[str, Any]:
     )
     description = (
         f"**PAPER — NO REAL WAGER**\n"
+        f"Version: **{(entry.get('paper_version') or 'v3').upper()}** | "
         f"Platform: **{entry['platform'].title()}** | Tier: **{entry['tier'].title()}**\n"
         f"Stake: **${entry['stake']:.2f}** → **${entry['potential_payout']:.2f}** "
         f"| Expected ROI: **{entry['expected_roi']:.2f}%**\n"

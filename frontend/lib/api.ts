@@ -132,8 +132,24 @@ export interface PaperEntry {
   delivery_status: string
   delivery_attempts?: number
   delivery_error?: string | null
-  paper_version?: "v1" | "v2"
+  paper_version?: "v1" | "v2" | "v3"
   legs: PaperLeg[]
+}
+
+export interface PaperEraSummary {
+  since: string
+  starting_bankroll: number
+  bankroll: number
+  profit: number
+  exposure: number
+  entries: number
+  open_entries: number
+  wins: number
+  losses: number
+  pushes: number
+  voids: number
+  win_rate: number
+  last_updated: string | null
 }
 
 export interface PaperResponse {
@@ -153,22 +169,10 @@ export interface PaperResponse {
     daily_profit?: number
     last_updated: string | null
   }
-  v2_summary?: {
-    since: string
-    starting_bankroll: number
-    bankroll: number
-    profit: number
-    exposure: number
-    entries: number
-    open_entries: number
-    wins: number
-    losses: number
-    pushes: number
-    voids: number
-    win_rate: number
-    last_updated: string | null
-  }
+  v2_summary?: PaperEraSummary
   v2_start?: string
+  v3_summary?: PaperEraSummary
+  v3_start?: string
   entries: PaperEntry[]
   automation: {
     status: string

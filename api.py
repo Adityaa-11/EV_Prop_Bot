@@ -148,6 +148,8 @@ PAPER_DRY_SPELL_ALERT_COOLDOWN_HOURS = float(
     os.getenv("PAPER_DRY_SPELL_ALERT_COOLDOWN_HOURS", "12")
 )
 PAPER_V2_START = os.getenv("PAPER_V2_START", "2026-09-04")
+# V3 = post-ranking-fix era (higher floor, best-ROI first, lock-window caps)
+PAPER_V3_START = os.getenv("PAPER_V3_START", "2026-09-11")
 PAPER_SCHEDULER_ENABLED = os.getenv("PAPER_SCHEDULER_ENABLED", "false").lower() in {
     "1",
     "true",
@@ -2314,7 +2316,17 @@ def _prepare_created_entry(entry: dict[str, Any]) -> dict[str, Any]:
         prepared["execution_mode"] = "live"
     else:
         prepared["execution_mode"] = "paper"
+    prepared["paper_version"] = _paper_version_for_created_at(prepared.get("created_at"))
     return prepared
+
+
+def _paper_version_for_created_at(created_at: str | None) -> str:
+    created = str(created_at or "")[:10]
+    if created and created >= PAPER_V3_START[:10]:
+        return "v3"
+    if created and created >= PAPER_V2_START[:10]:
+        return "v2"
+    return "v1"
 
 
 async def run_paper_delivery() -> dict[str, Any]:
@@ -2586,11 +2598,14 @@ async def paper_dashboard(limit: int = Query(100, ge=1, le=500)):
     today = datetime.now(timezone.utc).date().isoformat()
     scans_today = int(budget.get("count", 0)) if budget.get("date") == today else 0
     v2_since = PAPER_V2_START[:10]
+    v3_since = PAPER_V3_START[:10]
     entries = []
     for entry in store.list_paper_entries(limit):
-        created = str(entry.get("created_at") or "")[:10]
         tagged = dict(entry)
-        tagged["paper_version"] = "v2" if created >= v2_since else "v1"
+        tagged["paper_version"] = (
+            entry.get("paper_version")
+            or _paper_version_for_created_at(entry.get("created_at"))
+        )
         entries.append(tagged)
     return {
         "mode": "paper",
@@ -2600,6 +2615,11 @@ async def paper_dashboard(limit: int = Query(100, ge=1, le=500)):
             since=PAPER_V2_START,
         ),
         "v2_start": v2_since,
+        "v3_summary": store.paper_summary_since(
+            PAPER_POLICY.starting_bankroll,
+            since=PAPER_V3_START,
+        ),
+        "v3_start": v3_since,
         "entries": entries,
         "automation": store.get_state("paper_latest") or {
             "status": "waiting",
