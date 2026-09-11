@@ -11,7 +11,7 @@ from typing import Any, Callable
 
 @dataclass(frozen=True)
 class PaperPolicy:
-    starting_bankroll: float = 200.0
+    starting_bankroll: float = 1000.0
     stake: float = 10.0
     daily_stake_cap: float = 1000.0
     daily_loss_stop: float = 200.0

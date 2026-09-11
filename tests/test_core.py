@@ -45,6 +45,15 @@ class CoreScoringTests(unittest.TestCase):
         self.assertEqual(canonical_market_key("batter_hits_alternate"), "batter_hits")
         self.assertEqual(canonical_market_key("batter_hits"), "batter_hits")
 
+    def test_mlb_market_priority_fetches_batter_props_before_cap(self):
+        from api import DFS_MARKETS_BY_SPORT, SHARP_MARKET_LIMIT
+
+        mlb = DFS_MARKETS_BY_SPORT["mlb"]
+        capped = mlb[:SHARP_MARKET_LIMIT]
+        self.assertIn("batter_total_bases", capped)
+        self.assertIn("batter_hits", capped)
+        self.assertLess(mlb.index("batter_total_bases"), mlb.index("pitcher_strikeouts"))
+
     def test_paper_version_eras(self):
         self.assertEqual(_paper_version_for_created_at("2026-09-03T12:00:00+00:00"), "v1")
         self.assertEqual(_paper_version_for_created_at("2026-09-04T00:00:00+00:00"), "v2")

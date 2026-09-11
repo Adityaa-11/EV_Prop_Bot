@@ -142,8 +142,8 @@ export default function PaperTradingPage() {
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
         <MetricCard
           label="Paper Bankroll"
-          value={currency.format(summary?.bankroll ?? 200)}
-          detail={`Started at ${currency.format(summary?.starting_bankroll ?? 200)}`}
+          value={currency.format(summary?.bankroll ?? 1000)}
+          detail={`Started at ${currency.format(summary?.starting_bankroll ?? 1000)}`}
         />
         <MetricCard
           label="Profit / Loss"

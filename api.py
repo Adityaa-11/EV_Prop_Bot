@@ -111,7 +111,7 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY")
 HERMES_API_KEY = os.getenv("HERMES_API_KEY")
 PAPER_POLICY = PaperPolicy(
-    starting_bankroll=float(os.getenv("PAPER_STARTING_BANKROLL", "200")),
+    starting_bankroll=float(os.getenv("PAPER_STARTING_BANKROLL", "1000")),
     stake=float(os.getenv("PAPER_STAKE", "10")),
     daily_stake_cap=float(os.getenv("PAPER_DAILY_STAKE_CAP", "1000")),
     daily_loss_stop=float(os.getenv("PAPER_DAILY_LOSS_STOP", "200")),
@@ -929,14 +929,15 @@ DFS_MARKETS_BY_SPORT: dict[str, list[str]] = {
         "player_anytime_td",
     ],
     "mlb": [
-        "pitcher_strikeouts",
-        "pitcher_hits_allowed",
-        "pitcher_earned_runs",
-        "pitcher_walks",
+        # DFS volume is mostly batter props; keep these ahead of the market-fetch cap.
         "batter_total_bases",
         "batter_hits",
-        "batter_rbis",
         "batter_runs",
+        "batter_rbis",
+        "pitcher_strikeouts",
+        "pitcher_hits_allowed",
+        "pitcher_walks",
+        "pitcher_earned_runs",
         "batter_home_runs",
         "batter_stolen_bases",
     ],
@@ -1558,9 +1559,10 @@ MARKET_PRIORITY_BY_SPORT = {
     sport: markets for sport, markets in DFS_MARKETS_BY_SPORT.items()
 }
 
-# Reduce calls to keep EV endpoint responsive
-SHARP_EVENT_LIMIT = int(os.getenv("SHARP_EVENT_LIMIT", "8"))
-SHARP_MARKET_LIMIT = int(os.getenv("SHARP_MARKET_LIMIT", "4"))
+# Reduce calls to keep EV endpoint responsive, but keep enough room for
+# the high-volume DFS markets (MLB batters + a couple pitcher markets).
+SHARP_EVENT_LIMIT = int(os.getenv("SHARP_EVENT_LIMIT", "12"))
+SHARP_MARKET_LIMIT = int(os.getenv("SHARP_MARKET_LIMIT", "6"))
 
 async def fetch_sharp_odds(
     session: aiohttp.ClientSession,
@@ -1684,7 +1686,18 @@ async def fetch_sharp_odds(
 
             return event_odds
 
-        events = events[:SHARP_EVENT_LIMIT]
+        def _commence_sort_key(event: dict) -> datetime:
+            raw = event.get("commence_time")
+            if not raw:
+                return datetime.max.replace(tzinfo=timezone.utc)
+            try:
+                parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            except ValueError:
+                return datetime.max.replace(tzinfo=timezone.utc)
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+        # Prefer soonest games when we have to truncate quota usage.
+        events = sorted(events, key=_commence_sort_key)[:SHARP_EVENT_LIMIT]
         results = await asyncio.gather(*[_fetch_event(e) for e in events])
         for event_odds in results:
             all_odds.extend(event_odds)
@@ -2044,7 +2057,8 @@ async def _paper_slate_gate(
         return {"due": False, "reason": "no_events_within_six_hours", "events": []}
 
     nearest_minutes = min(event["minutes_to_start"] for event in eligible)
-    interval_seconds = 900 if nearest_minutes <= 30 else 1800 if nearest_minutes <= 120 else 3600
+    # Inside 30m, scan every 5m so we do not miss the strong near-lock window.
+    interval_seconds = 300 if nearest_minutes <= 30 else 900 if nearest_minutes <= 120 else 3600
     state = store.get_state(f"paper_scan:{sport}") or {}
     last_scan_value = state.get("last_scan_at")
     seconds_since_scan = None
