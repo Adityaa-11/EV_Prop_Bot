@@ -141,7 +141,7 @@ LIVE_ENTRY_POLICY = PaperPolicy(
     excellent_roi=float(os.getenv("LIVE_EXCELLENT_ROI", "10")),
     strong_roi=float(os.getenv("LIVE_STRONG_ROI", "5")),
 )
-PAPER_DAILY_SCAN_CAP = int(os.getenv("PAPER_DAILY_SCAN_CAP", "200"))
+PAPER_DAILY_SCAN_CAP = int(os.getenv("PAPER_DAILY_SCAN_CAP", "500"))
 PAPER_DRY_SPELL_HOURS = float(os.getenv("PAPER_DRY_SPELL_HOURS", "36"))
 # How far ahead the scheduler may spend Odds API quota. Align with near-lock
 # capacity so Sunday NFL / Saturday CFB can be scanned before the final 6h.
@@ -160,11 +160,13 @@ PAPER_SCHEDULER_ENABLED = os.getenv("PAPER_SCHEDULER_ENABLED", "false").lower() 
     "true",
     "yes",
 }
+# Keep paper sports narrow — scanning soccer/CFL/etc. burns the daily scan cap
+# without producing settlable slips.
 PAPER_SPORTS = [
     sport.strip().lower()
     for sport in os.getenv(
         "PAPER_SPORTS",
-        "mlb,nba,nfl,nhl,wnba,ncaab,ncaaf,cfl,mls,epl,summer",
+        "mlb,nfl,ncaaf",
     ).split(",")
     if sport.strip()
 ]
@@ -894,14 +896,14 @@ _BASKETBALL_DFS_MARKETS = [
     "player_first_basket",
 ]
 _FOOTBALL_DFS_MARKETS = [
-    "player_pass_yds",
-    "player_rush_yds",
-    "player_reception_yds",
     "player_receptions",
+    "player_reception_yds",
+    "player_rush_yds",
+    "player_pass_yds",
+    "player_rush_reception_yds",
     "player_pass_tds",
     "player_rush_tds",
     "player_reception_tds",
-    "player_rush_reception_yds",
     "player_rush_reception_tds",
     "player_pass_interceptions",
     "player_interceptions",
@@ -2069,6 +2071,8 @@ async def _paper_slate_gate(
 
     nearest_minutes = min(event["minutes_to_start"] for event in eligible)
     # Inside 30m, scan every 5m so we do not miss the strong near-lock window.
+    # Far-out Sunday slates should be cheap: a few scans/day, not hourly across
+    # every sport (that exhausts PAPER_DAILY_SCAN_CAP before anything places).
     if nearest_minutes <= 30:
         interval_seconds = 300
     elif nearest_minutes <= 120:
@@ -2076,7 +2080,7 @@ async def _paper_slate_gate(
     elif nearest_minutes <= 360:
         interval_seconds = 1800
     else:
-        interval_seconds = 3600
+        interval_seconds = 10800
     state = store.get_state(f"paper_scan:{sport}") or {}
     last_scan_value = state.get("last_scan_at")
     seconds_since_scan = None
@@ -2299,6 +2303,20 @@ def _paper_open_horizon() -> dict[str, int]:
     return store.count_open_entries_by_horizon(PAPER_POLICY.near_lock_hours)
 
 
+def _paper_scan_budget() -> dict[str, Any]:
+    today = datetime.now(timezone.utc).date().isoformat()
+    budget = store.get_state("paper_scan_budget") or {}
+    scans_today = int(budget.get("count", 0)) if budget.get("date") == today else 0
+    remaining = max(0, PAPER_DAILY_SCAN_CAP - scans_today)
+    return {
+        "date": today,
+        "scans_today": scans_today,
+        "scan_cap": PAPER_DAILY_SCAN_CAP,
+        "remaining_scans": remaining,
+        "cap_reached": scans_today >= PAPER_DAILY_SCAN_CAP,
+    }
+
+
 def _paper_capacity_payload() -> dict[str, Any]:
     summary = store.paper_summary(PAPER_POLICY.starting_bankroll)
     horizon = _paper_open_horizon()
@@ -2309,6 +2327,13 @@ def _paper_capacity_payload() -> dict[str, Any]:
         open_near=horizon["near"],
         open_far=horizon["far"],
     )
+    scan_budget = _paper_scan_budget()
+    scan_blocked = (not capacity["can_scan"]) or scan_budget["cap_reached"]
+    block_reason = (
+        "daily_scan_cap_reached"
+        if scan_budget["cap_reached"]
+        else capacity["reason"]
+    )
     return {
         "open_entries": summary["open_entries"],
         "open_near": horizon["near"],
@@ -2317,11 +2342,12 @@ def _paper_capacity_payload() -> dict[str, Any]:
         "max_far_open_entries": PAPER_POLICY.max_far_open_entries,
         "near_lock_hours": PAPER_POLICY.near_lock_hours,
         "blocked": not capacity["can_create"],
-        "scan_blocked": not capacity["can_scan"],
-        "block_reason": capacity["reason"],
+        "scan_blocked": scan_blocked,
+        "block_reason": block_reason if scan_blocked or not capacity["can_create"] else None,
         "daily_staked": summary["daily_staked"],
         "daily_stake_cap": PAPER_POLICY.daily_stake_cap,
         "daily_cap_blocked": summary["daily_staked"] >= PAPER_POLICY.daily_stake_cap,
+        "daily_scan_cap_blocked": scan_budget["cap_reached"],
         "stake_slots_remaining": capacity["stake_slots"],
         "near_slots_remaining": capacity["near_slots"],
         "far_slots_remaining": capacity["far_slots"],
@@ -2627,9 +2653,7 @@ async def run_paper_tick(sport: str) -> dict[str, Any]:
 async def paper_dashboard(limit: int = Query(100, ge=1, le=500)):
     """Public, read-only paper portfolio used by the live dashboard."""
     store.backfill_closing_lines_from_observations()
-    budget = store.get_state("paper_scan_budget") or {}
-    today = datetime.now(timezone.utc).date().isoformat()
-    scans_today = int(budget.get("count", 0)) if budget.get("date") == today else 0
+    scan_budget = _paper_scan_budget()
     v2_since = PAPER_V2_START[:10]
     v3_since = PAPER_V3_START[:10]
     entries = []
@@ -2660,9 +2684,9 @@ async def paper_dashboard(limit: int = Query(100, ge=1, le=500)):
         },
         "scheduler": _paper_scheduler_status(),
         "quota": {
-            "scans_today": scans_today,
-            "scan_cap": PAPER_DAILY_SCAN_CAP,
-            "remaining_scans": max(0, PAPER_DAILY_SCAN_CAP - scans_today),
+            "scans_today": scan_budget["scans_today"],
+            "scan_cap": scan_budget["scan_cap"],
+            "remaining_scans": scan_budget["remaining_scans"],
         },
         "delivery_failures": store.delivery_failure_count(),
         "settlement_backlog": store.settlement_backlog_count(),

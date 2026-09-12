@@ -211,6 +211,7 @@ export interface PaperResponse {
     daily_staked: number
     daily_stake_cap: number
     daily_cap_blocked: boolean
+    daily_scan_cap_blocked?: boolean
     stake_slots_remaining?: number
     near_slots_remaining?: number
     far_slots_remaining?: number

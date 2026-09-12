@@ -93,7 +93,9 @@ export default function PaperTradingPage() {
         <Card className="mb-6 border-amber-500/50 bg-amber-500/10 p-4">
           <p className="font-semibold text-amber-600 dark:text-amber-400">Paid scans paused</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            {data.capacity.block_reason === "daily_stake_cap_reached"
+            {data.capacity.block_reason === "daily_scan_cap_reached" || data.capacity.daily_scan_cap_blocked
+              ? `Daily paper scan cap hit (${quota?.scans_today ?? 0}/${quota?.scan_cap ?? 0}) — no new EV scans until UTC midnight or the cap is raised.`
+              : data.capacity.block_reason === "daily_stake_cap_reached"
               ? `Daily stake cap hit ($${data.capacity.daily_staked?.toFixed(0)}/$${data.capacity.daily_stake_cap?.toFixed(0)}) — saving Odds API scans until UTC midnight.`
               : `Near-term slots full (${data.capacity.open_near ?? 0}/${data.capacity.max_open_entries}) — scans resume when games settle or far-only capacity opens.`}
           </p>
@@ -187,7 +189,7 @@ export default function PaperTradingPage() {
         <Card className="p-4">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">Daily scan budget</p>
           <p className="mt-2 font-semibold">
-            {quota?.scans_today ?? 0} / {quota?.scan_cap ?? 200}
+            {quota?.scans_today ?? 0} / {quota?.scan_cap ?? 500}
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
             {quota?.remaining_scans ?? 0} paid scans remaining today
