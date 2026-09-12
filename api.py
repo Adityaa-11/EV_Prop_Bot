@@ -143,6 +143,11 @@ LIVE_ENTRY_POLICY = PaperPolicy(
 )
 PAPER_DAILY_SCAN_CAP = int(os.getenv("PAPER_DAILY_SCAN_CAP", "200"))
 PAPER_DRY_SPELL_HOURS = float(os.getenv("PAPER_DRY_SPELL_HOURS", "36"))
+# How far ahead the scheduler may spend Odds API quota. Align with near-lock
+# capacity so Sunday NFL / Saturday CFB can be scanned before the final 6h.
+PAPER_SCAN_HORIZON_HOURS = float(
+    os.getenv("PAPER_SCAN_HORIZON_HOURS", str(PAPER_POLICY.near_lock_hours))
+)
 OPS_ALERT_COOLDOWN_HOURS = float(os.getenv("OPS_ALERT_COOLDOWN_HOURS", "6"))
 PAPER_DRY_SPELL_ALERT_COOLDOWN_HOURS = float(
     os.getenv("PAPER_DRY_SPELL_ALERT_COOLDOWN_HOURS", "12")
@@ -2034,6 +2039,7 @@ async def _paper_slate_gate(
         return {"due": False, "reason": "schedule_unavailable", "events": []}
 
     now = datetime.now(timezone.utc)
+    horizon_minutes = max(60.0, PAPER_SCAN_HORIZON_HOURS * 60.0)
     eligible = []
     for event in payload:
         try:
@@ -2043,7 +2049,7 @@ async def _paper_slate_gate(
         except ValueError:
             continue
         minutes_to_start = (commence_time - now).total_seconds() / 60
-        if 5 < minutes_to_start <= 360:
+        if 5 < minutes_to_start <= horizon_minutes:
             eligible.append(
                 {
                     "id": event.get("id"),
@@ -2054,11 +2060,23 @@ async def _paper_slate_gate(
                 }
             )
     if not eligible:
-        return {"due": False, "reason": "no_events_within_six_hours", "events": []}
+        return {
+            "due": False,
+            "reason": "no_events_within_scan_horizon",
+            "events": [],
+            "horizon_hours": PAPER_SCAN_HORIZON_HOURS,
+        }
 
     nearest_minutes = min(event["minutes_to_start"] for event in eligible)
     # Inside 30m, scan every 5m so we do not miss the strong near-lock window.
-    interval_seconds = 300 if nearest_minutes <= 30 else 900 if nearest_minutes <= 120 else 3600
+    if nearest_minutes <= 30:
+        interval_seconds = 300
+    elif nearest_minutes <= 120:
+        interval_seconds = 900
+    elif nearest_minutes <= 360:
+        interval_seconds = 1800
+    else:
+        interval_seconds = 3600
     state = store.get_state(f"paper_scan:{sport}") or {}
     last_scan_value = state.get("last_scan_at")
     seconds_since_scan = None
@@ -2076,6 +2094,7 @@ async def _paper_slate_gate(
         "interval_seconds": interval_seconds,
         "seconds_since_scan": round(seconds_since_scan, 1) if seconds_since_scan is not None else None,
         "nearest_minutes": nearest_minutes,
+        "horizon_hours": PAPER_SCAN_HORIZON_HOURS,
     }
 
 

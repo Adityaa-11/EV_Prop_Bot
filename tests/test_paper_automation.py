@@ -138,7 +138,7 @@ class SchedulerHeartbeatTests(unittest.IsolatedAsyncioTestCase):
             tick = AsyncMock(
                 return_value={
                     "status": "waiting",
-                    "message": "no_events_within_six_hours",
+                    "message": "no_events_within_scan_horizon",
                     "created_count": 0,
                 }
             )
