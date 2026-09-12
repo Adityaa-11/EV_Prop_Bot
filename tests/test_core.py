@@ -61,6 +61,18 @@ class CoreScoringTests(unittest.TestCase):
         self.assertEqual(_paper_version_for_created_at("2026-09-11T00:00:00+00:00"), "v3")
         self.assertEqual(_paper_version_for_created_at("2026-09-12T15:00:00+00:00"), "v3")
 
+    def test_scan_budget_reset_clears_counters(self):
+        from api import reset_paper_scan_budget, _paper_scan_budget, store as api_store
+        from datetime import datetime, timezone
+
+        today = datetime.now(timezone.utc).date().isoformat()
+        api_store.set_state("paper_scan_budget", {"date": today, "count": 200})
+        result = reset_paper_scan_budget(reason="unit_test")
+        self.assertTrue(result["reset"])
+        budget = _paper_scan_budget()
+        self.assertEqual(budget["scans_today"], 0)
+        self.assertFalse(budget["cap_reached"])
+
     def test_consensus_uses_only_exact_line_and_event(self):
         prop = Prop(
             id="prop-1",

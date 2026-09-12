@@ -142,6 +142,14 @@ LIVE_ENTRY_POLICY = PaperPolicy(
     strong_roi=float(os.getenv("LIVE_STRONG_ROI", "5")),
 )
 PAPER_DAILY_SCAN_CAP = int(os.getenv("PAPER_DAILY_SCAN_CAP", "500"))
+# Keep headroom so far-out NFL/CFB scans cannot exhaust the whole day.
+PAPER_NEAR_LOCK_SCAN_RESERVE = int(os.getenv("PAPER_NEAR_LOCK_SCAN_RESERVE", "80"))
+PAPER_SPORT_DAILY_SCAN_CAP = int(os.getenv("PAPER_SPORT_DAILY_SCAN_CAP", "120"))
+# One-shot boot reset token. Change this to force another budget clear on deploy.
+PAPER_SCAN_BUDGET_RESET_TOKEN = os.getenv(
+    "PAPER_SCAN_BUDGET_RESET_TOKEN",
+    "v3-unblock-20260912",
+)
 PAPER_DRY_SPELL_HOURS = float(os.getenv("PAPER_DRY_SPELL_HOURS", "36"))
 # How far ahead the scheduler may spend Odds API quota. Align with near-lock
 # capacity so Sunday NFL / Saturday CFB can be scanned before the final 6h.
@@ -2314,7 +2322,76 @@ def _paper_scan_budget() -> dict[str, Any]:
         "scan_cap": PAPER_DAILY_SCAN_CAP,
         "remaining_scans": remaining,
         "cap_reached": scans_today >= PAPER_DAILY_SCAN_CAP,
+        "near_lock_reserve": PAPER_NEAR_LOCK_SCAN_RESERVE,
+        "sport_daily_cap": PAPER_SPORT_DAILY_SCAN_CAP,
     }
+
+
+def _sport_scan_count(sport: str, today: str) -> int:
+    state = store.get_state(f"paper_scan_budget:{sport.lower()}") or {}
+    return int(state.get("count", 0)) if state.get("date") == today else 0
+
+
+def _increment_scan_budget(sport: str, *, today: str, scans_today: int) -> int:
+    next_count = scans_today + 1
+    store.set_state(
+        "paper_scan_budget",
+        {"date": today, "count": next_count},
+    )
+    sport_key = sport.lower()
+    sport_count = _sport_scan_count(sport_key, today)
+    store.set_state(
+        f"paper_scan_budget:{sport_key}",
+        {"date": today, "count": sport_count + 1},
+    )
+    return next_count
+
+
+def reset_paper_scan_budget(*, reason: str) -> dict[str, Any]:
+    """Clear today's paper scan counters so EV scans can resume."""
+    today = datetime.now(timezone.utc).date().isoformat()
+    previous = store.get_state("paper_scan_budget") or {}
+    store.set_state(
+        "paper_scan_budget",
+        {
+            "date": today,
+            "count": 0,
+            "reset_reason": reason,
+            "reset_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    for sport in PAPER_SPORTS:
+        store.set_state(
+            f"paper_scan_budget:{sport}",
+            {"date": today, "count": 0, "reset_reason": reason},
+        )
+    return {
+        "reset": True,
+        "reason": reason,
+        "previous": previous,
+        "budget": _paper_scan_budget(),
+    }
+
+
+def _maybe_reset_scan_budget_on_boot() -> dict[str, Any] | None:
+    applied = store.get_state("paper_scan_budget_reset_applied") or {}
+    token = PAPER_SCAN_BUDGET_RESET_TOKEN
+    if not token or applied.get("token") == token:
+        return None
+    result = reset_paper_scan_budget(reason=f"boot_token:{token}")
+    store.set_state(
+        "paper_scan_budget_reset_applied",
+        {
+            "token": token,
+            "applied_at": datetime.now(timezone.utc).isoformat(),
+            "previous_count": (result.get("previous") or {}).get("count"),
+        },
+    )
+    print(
+        f"[PaperScheduler] reset scan budget via token={token} "
+        f"previous_count={(result.get('previous') or {}).get('count')}"
+    )
+    return result
 
 
 def _paper_capacity_payload() -> dict[str, Any]:
@@ -2494,6 +2571,37 @@ async def run_paper_tick(sport: str) -> dict[str, Any]:
             )
             return {**latest, "created_entries": [], "created_count": 0}
 
+        sport_scans_today = _sport_scan_count(normalized_sport, today)
+        if sport_scans_today >= PAPER_SPORT_DAILY_SCAN_CAP:
+            latest = {
+                "status": "waiting",
+                "sport": normalized_sport.upper(),
+                "message": "sport_daily_scan_cap_reached",
+                "sport_scans_today": sport_scans_today,
+                "sport_scan_cap": PAPER_SPORT_DAILY_SCAN_CAP,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            }
+            store.set_state("paper_latest", latest)
+            return {**latest, "created_entries": [], "created_count": 0}
+
+        remaining_scans = PAPER_DAILY_SCAN_CAP - scans_today
+        nearest_minutes = float(gate.get("nearest_minutes") or 0)
+        if (
+            remaining_scans <= PAPER_NEAR_LOCK_SCAN_RESERVE
+            and nearest_minutes > 120
+        ):
+            latest = {
+                "status": "waiting",
+                "sport": normalized_sport.upper(),
+                "message": "scan_reserve_for_near_lock",
+                "remaining_scans": remaining_scans,
+                "near_lock_reserve": PAPER_NEAR_LOCK_SCAN_RESERVE,
+                "gate": gate,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            }
+            store.set_state("paper_latest", latest)
+            return {**latest, "created_entries": [], "created_count": 0}
+
         summary = store.paper_summary(PAPER_POLICY.starting_bankroll)
         horizon = _paper_open_horizon()
         capacity = compute_paper_capacity(
@@ -2620,9 +2728,10 @@ async def run_paper_tick(sport: str) -> dict[str, Any]:
                 await run_paper_delivery()
 
         checked_at = datetime.now(timezone.utc).isoformat()
-        store.set_state(
-            "paper_scan_budget",
-            {"date": today, "count": scans_today + 1},
+        next_scans_today = _increment_scan_budget(
+            normalized_sport,
+            today=today,
+            scans_today=scans_today,
         )
         store.set_state(
             f"paper_scan:{normalized_sport}",
@@ -2642,7 +2751,7 @@ async def run_paper_tick(sport: str) -> dict[str, Any]:
             "updated_closing_lines": updated_closing_lines,
             "gate": gate,
             "checked_at": checked_at,
-            "scans_today": scans_today + 1,
+            "scans_today": next_scans_today,
             "scan_cap": PAPER_DAILY_SCAN_CAP,
         }
         store.set_state("paper_latest", latest)
@@ -2874,6 +2983,7 @@ async def hermes_execution_heartbeat(worker_id: str = Query(None)):
 @app.on_event("startup")
 async def start_paper_scheduler() -> None:
     global paper_scheduler
+    _maybe_reset_scan_budget_on_boot()
     paper_scheduler = PaperScheduler(
         store=store,
         tick_sport=run_paper_tick,
@@ -2884,9 +2994,17 @@ async def start_paper_scheduler() -> None:
         after_cycle=_alert_scheduler_cycle,
     )
     await paper_scheduler.start()
+    budget = _paper_scan_budget()
     print(
-        f"[PaperScheduler] enabled={PAPER_SCHEDULER_ENABLED} sports={PAPER_SPORTS}"
+        f"[PaperScheduler] enabled={PAPER_SCHEDULER_ENABLED} sports={PAPER_SPORTS} "
+        f"scans_today={budget['scans_today']}/{budget['scan_cap']}"
     )
+
+
+@app.post("/api/hermes/paper/scan-budget/reset", dependencies=[Depends(require_hermes_key)])
+async def hermes_reset_paper_scan_budget(reason: str = Query("manual_reset")):
+    """Clear today's paper scan budget so V3 data collection can continue."""
+    return reset_paper_scan_budget(reason=reason)
 
 
 @app.on_event("shutdown")
