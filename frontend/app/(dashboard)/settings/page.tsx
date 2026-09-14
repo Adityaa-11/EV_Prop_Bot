@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
 import { CheckCircle2, XCircle, Loader2, RefreshCw, AlertTriangle, Key } from "lucide-react"
-import { checkHealth, getOddsUsage, type HealthResponse, type OddsUsageResponse } from "@/lib/api"
+import { checkHealth, getOddsUsage, getAllKeysUsage, rotateKey, setKey, type HealthResponse, type OddsUsageResponse, type AllKeysUsageResponse } from "@/lib/api"
 import { Progress } from "@/components/ui/progress"
 
 export default function SettingsPage() {
@@ -18,6 +18,16 @@ export default function SettingsPage() {
   const [healthError, setHealthError] = React.useState<string | null>(null)
   const [oddsUsage, setOddsUsage] = React.useState<OddsUsageResponse | null>(null)
   const [usageLoading, setUsageLoading] = React.useState(true)
+  const [adminKey, setAdminKey] = React.useState("")
+  const [allKeys, setAllKeys] = React.useState<AllKeysUsageResponse | null>(null)
+  const [allKeysLoading, setAllKeysLoading] = React.useState(false)
+  const [allKeysError, setAllKeysError] = React.useState<string | null>(null)
+  const [keyActionLoading, setKeyActionLoading] = React.useState(false)
+
+  React.useEffect(() => {
+    const saved = window.localStorage.getItem("ev_admin_api_key")
+    if (saved) setAdminKey(saved)
+  }, [])
 
   const checkApiHealth = async () => {
     setHealthLoading(true)
@@ -41,6 +51,53 @@ export default function SettingsPage() {
       console.error("Failed to fetch odds usage:", err)
     } finally {
       setUsageLoading(false)
+    }
+  }
+
+  const fetchAllKeys = async () => {
+    if (!adminKey.trim()) {
+      setAllKeysError("Paste your ADMIN_API_KEY first")
+      return
+    }
+    setAllKeysLoading(true)
+    setAllKeysError(null)
+    try {
+      window.localStorage.setItem("ev_admin_api_key", adminKey.trim())
+      const result = await getAllKeysUsage(adminKey.trim())
+      setAllKeys(result)
+    } catch (err) {
+      setAllKeys(null)
+      setAllKeysError(err instanceof Error ? err.message : "Failed to load key usage")
+    } finally {
+      setAllKeysLoading(false)
+    }
+  }
+
+  const handleRotate = async () => {
+    if (!adminKey.trim()) return
+    setKeyActionLoading(true)
+    try {
+      await rotateKey(adminKey.trim())
+      await fetchAllKeys()
+      await fetchOddsUsage()
+    } catch (err) {
+      setAllKeysError(err instanceof Error ? err.message : "Rotate failed")
+    } finally {
+      setKeyActionLoading(false)
+    }
+  }
+
+  const handleSetKey = async (keyIndex: number) => {
+    if (!adminKey.trim()) return
+    setKeyActionLoading(true)
+    try {
+      await setKey(keyIndex, adminKey.trim())
+      await fetchAllKeys()
+      await fetchOddsUsage()
+    } catch (err) {
+      setAllKeysError(err instanceof Error ? err.message : "Set key failed")
+    } finally {
+      setKeyActionLoading(false)
     }
   }
 
@@ -216,10 +273,27 @@ export default function SettingsPage() {
                   </div>
                 </div>
 
+                {oddsUsage.auto_rotation && (
+                  <div className="rounded-md bg-muted p-3 text-sm">
+                    <p>
+                      Auto-rotation:{" "}
+                      <span className="font-semibold">
+                        {oddsUsage.auto_rotation.enabled ? "on" : "off"}
+                      </span>
+                      {" · "}
+                      current key {oddsUsage.auto_rotation.current_key}/
+                      {oddsUsage.auto_rotation.total_keys}
+                    </p>
+                    {oddsUsage.message && (
+                      <p className="mt-1 text-amber-600 dark:text-amber-400">{oddsUsage.message}</p>
+                    )}
+                  </div>
+                )}
+
                 {(oddsUsage.requests_remaining || 0) < 50 && (
                   <div className="flex items-center gap-2 rounded-md bg-yellow-500/10 p-3 text-sm text-yellow-600 dark:text-yellow-400">
                     <AlertTriangle className="h-4 w-4" />
-                    <span>Running low on API requests! Consider using a backup API key.</span>
+                    <span>Running low on API requests! Check all keys below or add fresh Odds API keys.</span>
                   </div>
                 )}
               </>
@@ -238,13 +312,95 @@ export default function SettingsPage() {
               <Key className="h-5 w-5" />
               API Key Manager
             </CardTitle>
-            <CardDescription>Protected production administration</CardDescription>
+            <CardDescription>
+              View remaining quota for every Odds API key and force rotate. Requires Railway{" "}
+              <code className="rounded bg-muted px-1">ADMIN_API_KEY</code>.
+            </CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="rounded-md bg-muted p-4 text-sm text-muted-foreground">
-              Key previews, rotation, cache clearing, and quota-consuming refreshes are no longer exposed in the public browser.
-              Use authenticated admin or Hermes API requests instead.
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-[1fr_auto_auto]">
+              <div className="space-y-2">
+                <Label htmlFor="admin-key">Admin API Key</Label>
+                <Input
+                  id="admin-key"
+                  type="password"
+                  value={adminKey}
+                  onChange={(e) => setAdminKey(e.target.value)}
+                  placeholder="Paste ADMIN_API_KEY"
+                  autoComplete="off"
+                />
+              </div>
+              <div className="flex items-end">
+                <Button onClick={() => void fetchAllKeys()} disabled={allKeysLoading || !adminKey.trim()}>
+                  {allKeysLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                  Load all keys
+                </Button>
+              </div>
+              <div className="flex items-end">
+                <Button
+                  variant="outline"
+                  onClick={() => void handleRotate()}
+                  disabled={keyActionLoading || !adminKey.trim()}
+                >
+                  Rotate
+                </Button>
+              </div>
             </div>
+
+            {allKeysError && (
+              <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{allKeysError}</div>
+            )}
+
+            {allKeys && (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+                  <span>
+                    Current key <span className="font-semibold text-foreground">{allKeys.current_key}</span> /{" "}
+                    {allKeys.total_keys}
+                  </span>
+                  <span>
+                    Total remaining{" "}
+                    <span className="font-semibold text-foreground">{allKeys.total_remaining}</span>
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {allKeys.keys.map((key) => (
+                    <div
+                      key={key.key_number}
+                      className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">Key {key.key_number}</span>
+                          <Badge
+                            variant={key.status === "active" ? "default" : "outline"}
+                            className={key.status === "active" ? "bg-green-600" : ""}
+                          >
+                            {key.status}
+                          </Badge>
+                          {key.key_number === allKeys.current_key && (
+                            <Badge variant="secondary">current</Badge>
+                          )}
+                        </div>
+                        <p className="mt-1 font-mono text-xs text-muted-foreground">{key.key_preview}</p>
+                        <p className="mt-1 text-sm">
+                          {key.requests_remaining} remaining · {key.requests_used} used
+                        </p>
+                        {key.error && <p className="text-xs text-destructive">{key.error}</p>}
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={keyActionLoading || key.status === "invalid"}
+                        onClick={() => void handleSetKey(key.key_number)}
+                      >
+                        Use
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
 

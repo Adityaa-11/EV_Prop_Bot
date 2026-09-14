@@ -280,6 +280,12 @@ class OddsAPIKeyManager:
             return False
         
         old_index = self.current_index
+        # If every key was marked exhausted, clear and retry. Monthly quotas reset
+        # and a sticky disabled set otherwise permanently kills auto-rotation.
+        if len(self.disabled_indices) >= len(self.keys):
+            print("[API Keys] All keys were marked exhausted; clearing disabled set to re-probe")
+            self.disabled_indices.clear()
+
         for offset in range(1, len(self.keys) + 1):
             candidate = (old_index + offset) % len(self.keys)
             if candidate not in self.disabled_indices:
@@ -322,6 +328,7 @@ class OddsAPIKeyManager:
             "total_keys": len(self.keys),
             "current_key_index": self.current_index + 1,
             "current_key_preview": f"{self.current_key[:8]}..." if self.current_key else None,
+            "disabled_keys": sorted(i + 1 for i in self.disabled_indices),
             "usage": self.key_usage,
         }
     
@@ -3367,6 +3374,8 @@ async def set_specific_key(key_index: int):
         return {"success": False, "error": f"Invalid key index. Must be 1-{len(api_key_manager.keys)}"}
     
     api_key_manager.current_index = key_index - 1
+    # Manual selection should re-enable probing this key (e.g. after monthly reset).
+    api_key_manager.disabled_indices.discard(key_index - 1)
     return {
         "success": True,
         "current_key": key_index,
@@ -3458,7 +3467,13 @@ async def get_odds_api_usage():
                         "enabled": key_status["total_keys"] > 1,
                         "total_keys": key_status["total_keys"],
                         "current_key": key_status["current_key_index"],
-                    }
+                        "disabled_keys": key_status.get("disabled_keys", []),
+                    },
+                    "message": (
+                        None
+                        if remaining > 0
+                        else "Current key is depleted. Open Settings → API Key Manager with your ADMIN_API_KEY to inspect all keys."
+                    ),
                 }
         except Exception as e:
             return {"error": str(e), "configured": True}

@@ -360,10 +360,12 @@ export interface OddsUsageResponse {
   requests_remaining?: number
   requests_total?: number
   error?: string
+  message?: string | null
   auto_rotation?: {
     enabled: boolean
     total_keys: number
     current_key: number
+    disabled_keys?: number[]
   }
 }
 
@@ -388,8 +390,10 @@ export interface AllKeysUsageResponse {
   total_remaining: number
 }
 
-export async function getAllKeysUsage(): Promise<AllKeysUsageResponse> {
-  return fetchApi<AllKeysUsageResponse>("/api/all-keys-usage")
+export async function getAllKeysUsage(adminKey: string): Promise<AllKeysUsageResponse> {
+  return fetchApi<AllKeysUsageResponse>("/api/all-keys-usage", {
+    headers: { "x-admin-key": adminKey },
+  })
 }
 
 // Rotate key
@@ -401,13 +405,19 @@ export interface RotateKeyResponse {
   message?: string
 }
 
-export async function rotateKey(): Promise<RotateKeyResponse> {
-  return fetchApi<RotateKeyResponse>("/api/rotate-key", { method: "POST" })
+export async function rotateKey(adminKey: string): Promise<RotateKeyResponse> {
+  return fetchApi<RotateKeyResponse>("/api/rotate-key", {
+    method: "POST",
+    headers: { "x-admin-key": adminKey },
+  })
 }
 
 // Set specific key
-export async function setKey(keyIndex: number): Promise<RotateKeyResponse> {
-  return fetchApi<RotateKeyResponse>(`/api/set-key/${keyIndex}`, { method: "POST" })
+export async function setKey(keyIndex: number, adminKey: string): Promise<RotateKeyResponse> {
+  return fetchApi<RotateKeyResponse>(`/api/set-key/${keyIndex}`, {
+    method: "POST",
+    headers: { "x-admin-key": adminKey },
+  })
 }
 
 // Get all props
