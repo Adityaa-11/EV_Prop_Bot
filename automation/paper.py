@@ -18,18 +18,19 @@ class PaperPolicy:
     max_open_entries: int = 50
     max_far_open_entries: int = 50
     near_lock_hours: float = 48.0
-    # 2-leg 3x power break-even is ~57.7% per leg. Stay at/above BE; thin 55s overfit noise.
-    min_leg_win: float = 58.0
+    # 2-leg 3x power break-even is ~57.7% true. User wants volume at the 55% model band
+    # that other Discord bots surface; ROI gate below allows those pairs to place.
+    min_leg_win: float = 55.0
     min_leg_books: int = 3
     max_leg_dispersion: float = 4.0
     require_line_stability: bool = False
-    # V3.1: 58/58 @ 3x is ~+0.9% model ROI. An 8% ROI gate secretly required ~60/60
-    # and produced zero slips. Fire at break-even + tiny epsilon; keep best-first ranking.
-    excellent_roi: float = 0.5
-    strong_roi: float = 0.5
+    # 55/55 @ 3x ≈ -9.25% model ROI. Keep best-first ranking, but do not block the
+    # board the user is seeing (~55-56% singles) from ever pairing.
+    excellent_roi: float = -10.0
+    strong_roi: float = -10.0
     strong_lock_minutes: int = 30
     # Same lock window = shared game environment; avoid spraying correlated slips.
-    max_entries_per_lock_time: int = 1
+    max_entries_per_lock_time: int = 2
 
 
 PAYOUTS = {

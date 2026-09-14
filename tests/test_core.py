@@ -186,13 +186,13 @@ class PaperEntryTests(unittest.TestCase):
         now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)
         game_time = (now + timedelta(hours=2)).isoformat()
         plays = [
-            paper_play("one", "Player One", "event-1", 58, 3, 2, game_time),
-            paper_play("two", "Player Two", "event-2", 58, 3, 2, game_time),
+            paper_play("one", "Player One", "event-1", 55, 3, 2, game_time),
+            paper_play("two", "Player Two", "event-2", 55, 3, 2, game_time),
         ]
         blocked = build_paper_entries(
             plays,
             stability_for=lambda _: {"stable": True},
-            policy=PaperPolicy(excellent_roi=8, strong_roi=8),
+            policy=PaperPolicy(min_leg_win=58, excellent_roi=0.5, strong_roi=0.5),
             daily_staked=0,
             open_entries=0,
             now=now,
@@ -207,9 +207,9 @@ class PaperEntryTests(unittest.TestCase):
         )
         self.assertEqual(blocked["entries"], [])
         self.assertEqual(len(allowed["entries"]), 1)
-        # 58/58 @ 3x ≈ +0.92% model ROI.
-        self.assertGreaterEqual(allowed["entries"][0]["expected_roi"], 0.5)
-        self.assertLess(allowed["entries"][0]["expected_roi"], 8)
+        # 55/55 @ 3x ≈ -9.25% model ROI; volume mode intentionally allows it.
+        self.assertLess(allowed["entries"][0]["expected_roi"], 0)
+        self.assertGreaterEqual(allowed["entries"][0]["expected_roi"], -10)
 
     def test_prefers_higher_roi_and_excellent_before_weaker_slips(self):
         now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)
