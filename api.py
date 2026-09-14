@@ -123,9 +123,9 @@ PAPER_POLICY = PaperPolicy(
     max_leg_dispersion=float(os.getenv("PAPER_MAX_LEG_DISPERSION", "4")),
     require_line_stability=os.getenv("PAPER_REQUIRE_LINE_STABILITY", "false").lower()
     in {"1", "true", "yes"},
-    excellent_roi=float(os.getenv("PAPER_EXCELLENT_ROI", "8")),
-    strong_roi=float(os.getenv("PAPER_STRONG_ROI", "8")),
-    max_entries_per_lock_time=int(os.getenv("PAPER_MAX_ENTRIES_PER_LOCK", "2")),
+    excellent_roi=float(os.getenv("PAPER_EXCELLENT_ROI", "1")),
+    strong_roi=float(os.getenv("PAPER_STRONG_ROI", "1")),
+    max_entries_per_lock_time=int(os.getenv("PAPER_MAX_ENTRIES_PER_LOCK", "1")),
 )
 LIVE_ENTRY_POLICY = PaperPolicy(
     starting_bankroll=PAPER_POLICY.starting_bankroll,

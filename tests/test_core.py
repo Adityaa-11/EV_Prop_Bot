@@ -179,7 +179,36 @@ class PaperEntryTests(unittest.TestCase):
         )
         self.assertEqual(len(result["entries"]), 1)
         self.assertEqual(result["entries"][0]["tier"], "excellent")
-        self.assertGreaterEqual(result["entries"][0]["expected_roi"], 8)
+        # 62/62 @ 3x ≈ 15.3% ROI; must clear the V3.1 ~1% gate.
+        self.assertGreaterEqual(result["entries"][0]["expected_roi"], 1)
+
+    def test_v31_allows_break_even_pairs_that_old_8pct_gate_blocked(self):
+        now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)
+        game_time = (now + timedelta(hours=2)).isoformat()
+        plays = [
+            paper_play("one", "Player One", "event-1", 58, 3, 2, game_time),
+            paper_play("two", "Player Two", "event-2", 58, 3, 2, game_time),
+        ]
+        blocked = build_paper_entries(
+            plays,
+            stability_for=lambda _: {"stable": True},
+            policy=PaperPolicy(excellent_roi=8, strong_roi=8),
+            daily_staked=0,
+            open_entries=0,
+            now=now,
+        )
+        allowed = build_paper_entries(
+            plays,
+            stability_for=lambda _: {"stable": True},
+            policy=PaperPolicy(),
+            daily_staked=0,
+            open_entries=0,
+            now=now,
+        )
+        self.assertEqual(blocked["entries"], [])
+        self.assertEqual(len(allowed["entries"]), 1)
+        self.assertGreaterEqual(allowed["entries"][0]["expected_roi"], 0.9)
+        self.assertLess(allowed["entries"][0]["expected_roi"], 8)
 
     def test_prefers_higher_roi_and_excellent_before_weaker_slips(self):
         now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)

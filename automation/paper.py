@@ -23,12 +23,13 @@ class PaperPolicy:
     min_leg_books: int = 3
     max_leg_dispersion: float = 4.0
     require_line_stability: bool = False
-    excellent_roi: float = 8.0
-    # Keep strong near-lock path, but do not accept thinner ROI than excellent.
-    strong_roi: float = 8.0
+    # V3.1: 58/58 @ 3x is only ~+0.9% model ROI. An 8% ROI gate secretly required ~60/60
+    # and produced zero slips. Fire at break-even + epsilon; keep best-first ranking.
+    excellent_roi: float = 1.0
+    strong_roi: float = 1.0
     strong_lock_minutes: int = 30
-    # Same lock window = shared game environment; avoid spraying 6 correlated slips.
-    max_entries_per_lock_time: int = 2
+    # Same lock window = shared game environment; avoid spraying correlated slips.
+    max_entries_per_lock_time: int = 1
 
 
 PAYOUTS = {
