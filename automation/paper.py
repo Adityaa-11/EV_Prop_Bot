@@ -23,10 +23,10 @@ class PaperPolicy:
     min_leg_books: int = 3
     max_leg_dispersion: float = 4.0
     require_line_stability: bool = False
-    # V3.1: 58/58 @ 3x is only ~+0.9% model ROI. An 8% ROI gate secretly required ~60/60
-    # and produced zero slips. Fire at break-even + epsilon; keep best-first ranking.
-    excellent_roi: float = 1.0
-    strong_roi: float = 1.0
+    # V3.1: 58/58 @ 3x is ~+0.9% model ROI. An 8% ROI gate secretly required ~60/60
+    # and produced zero slips. Fire at break-even + tiny epsilon; keep best-first ranking.
+    excellent_roi: float = 0.5
+    strong_roi: float = 0.5
     strong_lock_minutes: int = 30
     # Same lock window = shared game environment; avoid spraying correlated slips.
     max_entries_per_lock_time: int = 1

@@ -179,8 +179,8 @@ class PaperEntryTests(unittest.TestCase):
         )
         self.assertEqual(len(result["entries"]), 1)
         self.assertEqual(result["entries"][0]["tier"], "excellent")
-        # 62/62 @ 3x ≈ 15.3% ROI; must clear the V3.1 ~1% gate.
-        self.assertGreaterEqual(result["entries"][0]["expected_roi"], 1)
+        # 62/62 @ 3x ≈ 15.3% ROI; must clear the V3.1 ~0.5% gate.
+        self.assertGreaterEqual(result["entries"][0]["expected_roi"], 0.5)
 
     def test_v31_allows_break_even_pairs_that_old_8pct_gate_blocked(self):
         now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)
@@ -207,7 +207,8 @@ class PaperEntryTests(unittest.TestCase):
         )
         self.assertEqual(blocked["entries"], [])
         self.assertEqual(len(allowed["entries"]), 1)
-        self.assertGreaterEqual(allowed["entries"][0]["expected_roi"], 0.9)
+        # 58/58 @ 3x ≈ +0.92% model ROI.
+        self.assertGreaterEqual(allowed["entries"][0]["expected_roi"], 0.5)
         self.assertLess(allowed["entries"][0]["expected_roi"], 8)
 
     def test_prefers_higher_roi_and_excellent_before_weaker_slips(self):
