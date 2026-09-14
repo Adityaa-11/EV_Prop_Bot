@@ -148,7 +148,7 @@ PAPER_SPORT_DAILY_SCAN_CAP = int(os.getenv("PAPER_SPORT_DAILY_SCAN_CAP", "120"))
 # One-shot boot reset token. Change this to force another budget clear on deploy.
 PAPER_SCAN_BUDGET_RESET_TOKEN = os.getenv(
     "PAPER_SCAN_BUDGET_RESET_TOKEN",
-    "v3-unblock-20260912",
+    "v31-55-rescans-20260914",
 )
 PAPER_DRY_SPELL_HOURS = float(os.getenv("PAPER_DRY_SPELL_HOURS", "36"))
 # How far ahead the scheduler may spend Odds API quota. Align with near-lock
@@ -2084,14 +2084,15 @@ async def _paper_slate_gate(
         }
 
     nearest_minutes = min(event["minutes_to_start"] for event in eligible)
-    # Inside 30m, scan every 5m so we do not miss the strong near-lock window.
-    # Far-out Sunday slates should be cheap: a few scans/day, not hourly across
-    # every sport (that exhausts PAPER_DAILY_SCAN_CAP before anything places).
+    # Same-day boards (MLB evening / MNF) must scan often enough to place.
+    # The old >6h => 3h cadence left afternoon windows idle for hours.
     if nearest_minutes <= 30:
         interval_seconds = 300
     elif nearest_minutes <= 120:
         interval_seconds = 900
     elif nearest_minutes <= 360:
+        interval_seconds = 1800
+    elif nearest_minutes <= 720:
         interval_seconds = 1800
     else:
         interval_seconds = 10800
@@ -2385,16 +2386,28 @@ def _maybe_reset_scan_budget_on_boot() -> dict[str, Any] | None:
     if not token or applied.get("token") == token:
         return None
     result = reset_paper_scan_budget(reason=f"boot_token:{token}")
+    # Force sports due immediately after deploy so same-day boards are not stuck
+    # behind an old 3h cadence timestamp.
+    for sport in PAPER_SPORTS:
+        store.set_state(
+            f"paper_scan:{sport}",
+            {
+                "last_scan_at": None,
+                "candidate_count": 0,
+                "reset_reason": f"boot_token:{token}",
+            },
+        )
     store.set_state(
         "paper_scan_budget_reset_applied",
         {
             "token": token,
             "applied_at": datetime.now(timezone.utc).isoformat(),
             "previous_count": (result.get("previous") or {}).get("count"),
+            "cleared_sport_cadence": list(PAPER_SPORTS),
         },
     )
     print(
-        f"[PaperScheduler] reset scan budget via token={token} "
+        f"[PaperScheduler] reset scan budget+cadence via token={token} "
         f"previous_count={(result.get('previous') or {}).get('count')}"
     )
     return result
@@ -2659,6 +2672,18 @@ async def run_paper_tick(sport: str) -> dict[str, Any]:
             scan_error = scan["error"]
         elif scan.get("detail"):
             scan_error = str(scan.get("detail"))[:500]
+        if not plays:
+            await _maybe_ops_alert(
+                f"zero_candidates:{normalized_sport}",
+                f"Scan priced 0 candidates · {normalized_sport.upper()}",
+                (
+                    "DFS boards are open but EV matching returned **0** plays. "
+                    "Usually Odds API quota/429 or no exact-line sharp matches.\n"
+                    f"error=`{scan_error or 'none'}`\n"
+                    f"Feed health: `{json.dumps(_feed_health_snapshot(), default=str)[:700]}`"
+                ),
+                color=0xEF4444,
+            )
         await _alert_scan_board_health(
             sport=normalized_sport,
             plays=plays,
