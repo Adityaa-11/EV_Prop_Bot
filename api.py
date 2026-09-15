@@ -27,6 +27,7 @@ import os
 import hashlib
 import hmac
 import time
+import json
 from dotenv import load_dotenv
 from storage import PipelineStore
 from automation import (
@@ -2889,11 +2890,32 @@ async def hermes_paper_settle():
     return await run_paper_settlement()
 
 
+@app.post("/api/admin/paper/settle", dependencies=[Depends(require_admin_key)])
+async def admin_paper_settle():
+    return await run_paper_settlement()
+
+
 @app.post(
     "/api/hermes/paper/entries/{entry_id}/settle",
     dependencies=[Depends(require_hermes_key)],
 )
 async def hermes_settle_paper_entry(entry_id: str, settlement: PaperSettlement):
+    allowed_results = {"win", "loss", "push", "void"}
+    result = settlement.result.lower()
+    if result not in allowed_results:
+        raise HTTPException(status_code=422, detail=f"result must be one of {sorted(allowed_results)}")
+    if settlement.payout < 0:
+        raise HTTPException(status_code=422, detail="payout cannot be negative")
+    if not store.apply_settlement(entry_id, result=result, payout=settlement.payout):
+        raise HTTPException(status_code=404, detail="Open paper entry not found")
+    return {"success": True, "entry_id": entry_id, "result": result}
+
+
+@app.post(
+    "/api/admin/paper/entries/{entry_id}/settle",
+    dependencies=[Depends(require_admin_key)],
+)
+async def admin_settle_paper_entry(entry_id: str, settlement: PaperSettlement):
     allowed_results = {"win", "loss", "push", "void"}
     result = settlement.result.lower()
     if result not in allowed_results:

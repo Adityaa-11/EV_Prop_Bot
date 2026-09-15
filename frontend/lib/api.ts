@@ -190,6 +190,13 @@ export interface PaperResponse {
     checked_at?: string
     message?: string
     created_count?: number
+    ticks?: Array<{
+      sport?: string
+      status?: string
+      message?: string
+      created_count?: number
+      checked_at?: string
+    }>
   }
   quota?: {
     scans_today: number
@@ -332,6 +339,31 @@ export async function checkHealth(): Promise<HealthResponse> {
 
 export async function getPaperDashboard(): Promise<PaperResponse> {
   return fetchApi<PaperResponse>("/api/paper")
+}
+
+export async function runPaperSettlement(adminKey: string): Promise<{
+  settled: number
+  voided: number
+  pending: number
+  actions: number
+}> {
+  return fetchApi("/api/admin/paper/settle", {
+    method: "POST",
+    headers: { "x-admin-key": adminKey },
+  })
+}
+
+export async function settlePaperEntry(
+  entryId: string,
+  result: "win" | "loss" | "push" | "void",
+  payout: number,
+  adminKey: string,
+): Promise<{ success: boolean; entry_id: string; result: string }> {
+  return fetchApi(`/api/admin/paper/entries/${encodeURIComponent(entryId)}/settle`, {
+    method: "POST",
+    headers: { "x-admin-key": adminKey },
+    body: JSON.stringify({ result, payout }),
+  })
 }
 
 export async function getLiveDashboard(): Promise<LiveResponse> {

@@ -16,11 +16,13 @@ STALE_ENTRY_VOID_HOURS = float(os.getenv("STALE_ENTRY_VOID_HOURS", "12"))
 
 SUPPORTED_MLB_MARKETS = {
     "batter_hits": "hits",
+    "batter_singles": "singles",
     "batter_home_runs": "homeRuns",
     "batter_rbis": "rbi",
     "batter_runs": "runs",
     "batter_stolen_bases": "stolenBases",
     "batter_total_bases": "totalBases",
+    "batter_hits_runs_rbis": "hitsRunsRbis",
     "pitcher_strikeouts": "strikeOuts",
     "pitcher_hits_allowed": "hits",
     "pitcher_walks": "baseOnBalls",
@@ -80,6 +82,19 @@ def _player_stat_from_boxscore(
                     + 2 * int(batting.get("doubles", 0) or 0)
                     + 3 * int(batting.get("triples", 0) or 0)
                     + 4 * int(batting.get("homeRuns", 0) or 0)
+                )
+            elif market_key == "batter_hits_runs_rbis":
+                raw = (
+                    int(batting.get("hits", 0) or 0)
+                    + int(batting.get("runs", 0) or 0)
+                    + int(batting.get("rbi", 0) or 0)
+                )
+            elif market_key == "batter_singles":
+                raw = (
+                    int(batting.get("hits", 0) or 0)
+                    - int(batting.get("doubles", 0) or 0)
+                    - int(batting.get("triples", 0) or 0)
+                    - int(batting.get("homeRuns", 0) or 0)
                 )
             else:
                 raw = batting.get(field)

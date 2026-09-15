@@ -5,7 +5,13 @@ import { Activity, Clock, RefreshCw, Trophy, WalletCards } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
-import { getPaperDashboard, type PaperResponse } from "@/lib/api"
+import { Input } from "@/components/ui/input"
+import {
+  getPaperDashboard,
+  runPaperSettlement,
+  settlePaperEntry,
+  type PaperResponse,
+} from "@/lib/api"
 
 const currency = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -34,6 +40,14 @@ export default function PaperTradingPage() {
   const [data, setData] = useState<PaperResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [adminKey, setAdminKey] = useState("")
+  const [settleBusy, setSettleBusy] = useState<string | null>(null)
+  const [settleMessage, setSettleMessage] = useState<string | null>(null)
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem("ev_admin_api_key")
+    if (saved) setAdminKey(saved)
+  }, [])
 
   const refresh = useCallback(async () => {
     try {
@@ -55,6 +69,54 @@ export default function PaperTradingPage() {
     return () => window.clearInterval(timer)
   }, [refresh])
 
+  const withAdmin = async (action: (key: string) => Promise<void>) => {
+    const key = adminKey.trim()
+    if (!key) {
+      setSettleMessage("Paste ADMIN_API_KEY (same one as Settings) to settle slips")
+      return
+    }
+    window.localStorage.setItem("ev_admin_api_key", key)
+    await action(key)
+  }
+
+  const handleRunSettlement = async () => {
+    setSettleBusy("run")
+    setSettleMessage(null)
+    try {
+      await withAdmin(async (key) => {
+        const result = await runPaperSettlement(key)
+        setSettleMessage(
+          `Settlement run: ${result.settled} settled · ${result.pending} pending · ${result.voided} voided`,
+        )
+        await refresh()
+      })
+    } catch (err) {
+      setSettleMessage(err instanceof Error ? err.message : "Settlement failed")
+    } finally {
+      setSettleBusy(null)
+    }
+  }
+
+  const handleManualSettle = async (
+    entryId: string,
+    result: "win" | "loss" | "push" | "void",
+    payout: number,
+  ) => {
+    setSettleBusy(entryId)
+    setSettleMessage(null)
+    try {
+      await withAdmin(async (key) => {
+        await settlePaperEntry(entryId, result, payout, key)
+        setSettleMessage(`Marked ${entryId} as ${result}`)
+        await refresh()
+      })
+    } catch (err) {
+      setSettleMessage(err instanceof Error ? err.message : "Manual settle failed")
+    } finally {
+      setSettleBusy(null)
+    }
+  }
+
   if (loading && !data) {
     return <div className="container mx-auto px-4 py-10 text-muted-foreground">Loading paper portfolio…</div>
   }
@@ -64,6 +126,9 @@ export default function PaperTradingPage() {
   const v3 = data?.v3_summary
   const scheduler = data?.scheduler
   const quota = data?.quota
+  const mlbTickError = scheduler?.ticks?.find(
+    (tick) => tick.sport?.toLowerCase() === "mlb" && tick.status === "error",
+  )
 
   return (
     <div className="container mx-auto px-4 py-6 sm:px-6">
@@ -88,6 +153,41 @@ export default function PaperTradingPage() {
       </div>
 
       {error && <Card className="mb-6 border-destructive p-4 text-sm text-destructive">{error}</Card>}
+
+      {(data?.settlement_backlog ?? 0) > 0 && (
+        <Card className="mb-6 border-orange-500/50 bg-orange-500/10 p-4">
+          <p className="font-semibold text-orange-600 dark:text-orange-400">Settlement backlog</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {data?.settlement_backlog} open entries are waiting on settlement. MLB auto-settles supported
+            markets; use Mark loss below if something is stuck.
+          </p>
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+            <Input
+              type="password"
+              value={adminKey}
+              onChange={(e) => setAdminKey(e.target.value)}
+              placeholder="ADMIN_API_KEY"
+              className="sm:max-w-xs"
+              autoComplete="off"
+            />
+            <Button
+              variant="outline"
+              disabled={settleBusy === "run"}
+              onClick={() => void handleRunSettlement()}
+            >
+              {settleBusy === "run" ? "Running…" : "Run settlement now"}
+            </Button>
+          </div>
+          {settleMessage && <p className="mt-2 text-xs text-muted-foreground">{settleMessage}</p>}
+        </Card>
+      )}
+
+      {mlbTickError && (
+        <Card className="mb-6 border-destructive/50 bg-destructive/10 p-4">
+          <p className="font-semibold text-destructive">MLB scanner error</p>
+          <p className="mt-1 text-sm text-muted-foreground">{mlbTickError.message}</p>
+        </Card>
+      )}
 
       {data?.capacity?.scan_blocked && (
         <Card className="mb-6 border-amber-500/50 bg-amber-500/10 p-4">
@@ -118,16 +218,6 @@ export default function PaperTradingPage() {
           <p className="mt-1 text-sm text-muted-foreground">
             {data?.capacity.open_entries}/{data?.capacity.max_open_entries} open entries — new paper slips are blocked
             until entries settle or stale non-MLB slips auto-void.
-          </p>
-        </Card>
-      )}
-
-      {(data?.settlement_backlog ?? 0) > 0 && (
-        <Card className="mb-6 border-orange-500/50 bg-orange-500/10 p-4">
-          <p className="font-semibold text-orange-600 dark:text-orange-400">Settlement backlog</p>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {data?.settlement_backlog} open entries are waiting on settlement. MLB settles automatically; other sports
-            void after the stale window.
           </p>
         </Card>
       )}
@@ -386,14 +476,46 @@ export default function PaperTradingPage() {
                 })}
               </div>
 
-              <div className="flex flex-col justify-between gap-2 bg-muted/30 px-5 py-3 text-xs text-muted-foreground sm:flex-row">
+              <div className="flex flex-col justify-between gap-2 bg-muted/30 px-5 py-3 text-xs text-muted-foreground sm:flex-row sm:items-center">
                 <span className="flex items-center gap-1">
                   <Trophy className="h-3.5 w-3.5" />
                   {entry.status === "settled"
                     ? `${entry.result} · ${currency.format(entry.profit ?? 0)}`
                     : "Awaiting results"}
                 </span>
-                <span className="flex flex-col items-start gap-1 sm:items-end">
+                <div className="flex flex-col items-start gap-2 sm:items-end">
+                  {entry.status === "open" && (
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        disabled={settleBusy === entry.id}
+                        onClick={() => void handleManualSettle(entry.id, "loss", 0)}
+                      >
+                        Mark loss
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={settleBusy === entry.id}
+                        onClick={() =>
+                          void handleManualSettle(entry.id, "void", entry.stake)
+                        }
+                      >
+                        Void / return stake
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={settleBusy === entry.id}
+                        onClick={() =>
+                          void handleManualSettle(entry.id, "win", entry.potential_payout)
+                        }
+                      >
+                        Mark win
+                      </Button>
+                    </div>
+                  )}
                   <span className="flex items-center gap-1">
                     <Clock className="h-3.5 w-3.5" />
                     Placed{" "}
@@ -405,7 +527,7 @@ export default function PaperTradingPage() {
                     <Clock className="h-3.5 w-3.5" />
                     Locks {entry.lock_time ? new Date(entry.lock_time).toLocaleString() : "unknown"}
                   </span>
-                </span>
+                </div>
               </div>
             </Card>
             )
