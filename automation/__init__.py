@@ -9,11 +9,17 @@ from .ops_health import (
     platform_play_counts,
     should_send_alert,
 )
+from .tennis_both_overs import (
+    TennisBothOversPolicy,
+    build_tennis_both_overs_entries,
+)
 
 __all__ = [
     "PaperPolicy",
     "PaperScheduler",
+    "TennisBothOversPolicy",
     "build_paper_entries",
+    "build_tennis_both_overs_entries",
     "compute_paper_capacity",
     "deliver_paper_entry",
     "deliver_ops_alert",

@@ -33,7 +33,9 @@ from storage import PipelineStore
 from automation import (
     PaperPolicy,
     PaperScheduler,
+    TennisBothOversPolicy,
     build_paper_entries,
+    build_tennis_both_overs_entries,
     compute_paper_capacity,
     deliver_paper_entry,
     deliver_live_status,
@@ -180,6 +182,12 @@ PAPER_SPORTS = [
     if sport.strip()
 ]
 EXECUTION_MODE = os.getenv("EXECUTION_MODE", "paper").lower()
+
+# Tennis both-overs correlation lane (DFS-board-only, separate from V3 EV)
+PAPER_TENNIS_BOTH_OVERS_ENABLED = os.getenv(
+    "PAPER_TENNIS_BOTH_OVERS_ENABLED", "false"
+).lower() in {"1", "true", "yes"}
+TENNIS_BOTH_OVERS_POLICY = TennisBothOversPolicy()
 LIVE_EXECUTION_ENABLED = os.getenv("LIVE_EXECUTION_ENABLED", "false").lower() in {
     "1",
     "true",
@@ -413,6 +421,7 @@ PP_LEAGUE_IDS = {
     "soccer": 82,
     "mls": 6,
     "epl": 14,
+    "tennis": 24,  # ATP/WTA — verify at partner-api.prizepicks.com/leagues
 }
 
 # Prefer partner-api (no PerimeterX). Main api.prizepicks.com still returns captcha.
@@ -439,6 +448,8 @@ UD_SPORTS = {
     # Summer / misc basketball board
     "summer": "BASKETBALL",
     "nba_summer": "BASKETBALL",
+    # Tennis boards (ATP/WTA)
+    "tennis": "TENNIS",
 }
 
 # Sports included when callers pass sport=all (each scanned separately)
@@ -2272,6 +2283,14 @@ async def _alert_scheduler_cycle(result: dict[str, Any]) -> None:
 
     await _alert_paper_dry_spell()
 
+    # Run the tennis both-overs correlation lane (DFS-board-only, no Odds API cost)
+    if PAPER_TENNIS_BOTH_OVERS_ENABLED:
+        try:
+            tennis_result = await run_tennis_both_overs_tick()
+            result["tennis_both_overs"] = tennis_result
+        except Exception as exc:  # noqa: BLE001
+            print(f"[TennisBothOvers] scheduler cycle error: {exc}")
+
 
 async def _alert_scan_board_health(
     *,
@@ -2797,6 +2816,99 @@ async def run_paper_tick(sport: str) -> dict[str, Any]:
         return {**latest, "created_entries": created_entries}
 
 
+# ---------------------------------------------------------------------------
+# Tennis both-overs correlation lane (DFS-board-only, no Odds API cost)
+# ---------------------------------------------------------------------------
+
+async def run_tennis_both_overs_tick() -> dict[str, Any]:
+    """Fetch tennis Games Won props from DFS boards and build correlation slips.
+
+    This is a separate strategy lane from V3 EV — no Odds API quota consumed,
+    no min_leg_win / consensus gate.  Tagged strategy=tennis_both_overs_games.
+    """
+    if not PAPER_TENNIS_BOTH_OVERS_ENABLED:
+        return {
+            "status": "disabled",
+            "message": "PAPER_TENNIS_BOTH_OVERS_ENABLED is false",
+            "created_count": 0,
+        }
+
+    now = datetime.now(timezone.utc)
+    today = now.date().isoformat()
+
+    state = store.get_state("tennis_both_overs_latest") or {}
+    last_scan = state.get("last_scan_at")
+    if last_scan:
+        try:
+            elapsed = (now - datetime.fromisoformat(last_scan)).total_seconds()
+            if elapsed < 300:
+                return {
+                    "status": "waiting",
+                    "message": "cadence_not_due",
+                    "seconds_since_scan": round(elapsed, 1),
+                    "created_count": 0,
+                }
+        except ValueError:
+            pass
+
+    props_raw: list[Any] = []
+    async with aiohttp.ClientSession() as session:
+        for fetcher, sport_arg in [
+            (fetch_prizepicks, "tennis"),
+            (fetch_underdog, "tennis"),
+        ]:
+            try:
+                result = await fetcher(session, sport_arg)
+                props_raw.extend(result)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[TennisBothOvers] {fetcher.__name__} error: {exc}")
+
+    prop_dicts = [p.model_dump() if hasattr(p, "model_dump") else dict(p) for p in props_raw]
+
+    daily_state = store.get_state("tennis_both_overs_daily") or {}
+    daily_placed = int(daily_state.get("count", 0)) if daily_state.get("date") == today else 0
+
+    build = build_tennis_both_overs_entries(
+        prop_dicts,
+        policy=TENNIS_BOTH_OVERS_POLICY,
+        daily_placed=daily_placed,
+        now=now,
+    )
+
+    created_entries = []
+    for entry in build["entries"]:
+        if store.create_paper_entry(entry, execution_mode="paper"):
+            created_entries.append(entry)
+
+    new_daily = daily_placed + len(created_entries)
+    store.set_state("tennis_both_overs_daily", {"date": today, "count": new_daily})
+
+    checked_at = now.isoformat()
+    store.set_state(
+        "tennis_both_overs_latest",
+        {
+            "status": "created" if created_entries else "watching",
+            "last_scan_at": checked_at,
+            "board_props": len(prop_dicts),
+            "games_won_props": build["games_won_props"],
+            "match_groups": build["match_groups"],
+            "created_count": len(created_entries),
+            "skipped_reasons": build["skipped_reasons"],
+            "daily_placed": new_daily,
+            "checked_at": checked_at,
+        },
+    )
+    return {
+        "status": "created" if created_entries else "watching",
+        "created_count": len(created_entries),
+        "created_entries": created_entries,
+        "board_props": len(prop_dicts),
+        "games_won_props": build["games_won_props"],
+        "match_groups": build["match_groups"],
+        "skipped_reasons": build["skipped_reasons"],
+    }
+
+
 @app.get("/api/paper")
 async def paper_dashboard(limit: int = Query(100, ge=1, le=500)):
     """Public, read-only paper portfolio used by the live dashboard."""
@@ -2850,6 +2962,10 @@ async def paper_dashboard(limit: int = Query(100, ge=1, le=500)):
             "shadow_mode": EXECUTION_SHADOW_MODE,
             "live_stake": LIVE_STAKE,
         },
+        "tennis_both_overs": {
+            "enabled": PAPER_TENNIS_BOTH_OVERS_ENABLED,
+            **(store.get_state("tennis_both_overs_latest") or {}),
+        },
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -2878,6 +2994,12 @@ async def paper_line_history(
 async def hermes_paper_tick(sport: str = Query("mlb")):
     """Run a quota-gated paper scan and create only deterministic slips."""
     return await run_paper_tick(sport)
+
+
+@app.post("/api/hermes/paper/tennis-both-overs", dependencies=[Depends(require_hermes_key)])
+async def hermes_tennis_both_overs_tick():
+    """Manually trigger one tennis both-overs scan (DFS-board-only)."""
+    return await run_tennis_both_overs_tick()
 
 
 @app.post("/api/hermes/paper/deliver", dependencies=[Depends(require_hermes_key)])

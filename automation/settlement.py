@@ -11,6 +11,8 @@ from fuzzywuzzy import fuzz
 
 
 SETTLEMENT_SUPPORTED_SPORTS = {"MLB"}
+# TODO: Add tennis auto-settlement when a reliable free stats API is identified.
+# For now, tennis slips settle via stale-void (non-MLB path) or admin manual settle.
 STALE_ENTRY_VOID_HOURS = float(os.getenv("STALE_ENTRY_VOID_HOURS", "12"))
 
 

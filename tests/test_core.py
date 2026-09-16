@@ -974,6 +974,185 @@ class PrizePicksDirectFeedTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(props[0].player_name, "Fallback Player")
 
 
+class TennisBothOversTests(unittest.TestCase):
+    """Unit tests for the tennis both-overs games-won correlation lane."""
+
+    @staticmethod
+    def _tennis_prop(prop_id, player, stat_type, line, game_time, platform="prizepicks", event_id=None):
+        return {
+            "id": prop_id,
+            "player_name": player,
+            "stat_type": stat_type,
+            "line": line,
+            "platform": platform,
+            "sport": "TENNIS",
+            "game_time": game_time,
+            "event_id": event_id,
+        }
+
+    def test_same_match_both_overs_creates_entry(self):
+        from automation.tennis_both_overs import build_tennis_both_overs_entries, TennisBothOversPolicy
+
+        now = datetime(2026, 9, 15, 16, tzinfo=timezone.utc)
+        game_time = (now + timedelta(hours=2)).isoformat()
+        props = [
+            self._tennis_prop("t1", "Novak Djokovic", "Games Won", 10.5, game_time),
+            self._tennis_prop("t2", "Carlos Alcaraz", "Games Won", 9.5, game_time),
+        ]
+        result = build_tennis_both_overs_entries(
+            props,
+            policy=TennisBothOversPolicy(stake=10, daily_cap=20, match_cap=1),
+            now=now,
+        )
+        self.assertEqual(len(result["entries"]), 1)
+        entry = result["entries"][0]
+        self.assertEqual(entry["strategy"], "tennis_both_overs_games")
+        self.assertEqual(entry["paper_version"], "tennis-v1")
+        self.assertEqual(entry["sport"], "TENNIS")
+        self.assertEqual(len(entry["legs"]), 2)
+        sides = {leg["side"] for leg in entry["legs"]}
+        self.assertEqual(sides, {"OVER"})
+        players = {leg["player_name"] for leg in entry["legs"]}
+        self.assertEqual(players, {"Novak Djokovic", "Carlos Alcaraz"})
+
+    def test_different_matches_rejected(self):
+        from automation.tennis_both_overs import build_tennis_both_overs_entries, TennisBothOversPolicy
+
+        now = datetime(2026, 9, 15, 16, tzinfo=timezone.utc)
+        game_time_a = (now + timedelta(hours=2)).isoformat()
+        game_time_b = (now + timedelta(hours=4)).isoformat()
+        props = [
+            self._tennis_prop("t1", "Novak Djokovic", "Games Won", 10.5, game_time_a),
+            self._tennis_prop("t2", "Carlos Alcaraz", "Games Won", 9.5, game_time_b),
+        ]
+        result = build_tennis_both_overs_entries(
+            props,
+            policy=TennisBothOversPolicy(stake=10, daily_cap=20, match_cap=1),
+            now=now,
+        )
+        self.assertEqual(len(result["entries"]), 0)
+        self.assertIn("missing_leg", result["skipped_reasons"])
+
+    def test_missing_leg_rejected(self):
+        from automation.tennis_both_overs import build_tennis_both_overs_entries, TennisBothOversPolicy
+
+        now = datetime(2026, 9, 15, 16, tzinfo=timezone.utc)
+        game_time = (now + timedelta(hours=2)).isoformat()
+        props = [
+            self._tennis_prop("t1", "Novak Djokovic", "Games Won", 10.5, game_time),
+        ]
+        result = build_tennis_both_overs_entries(
+            props,
+            policy=TennisBothOversPolicy(stake=10, daily_cap=20, match_cap=1),
+            now=now,
+        )
+        self.assertEqual(len(result["entries"]), 0)
+        self.assertIn("missing_leg", result["skipped_reasons"])
+
+    def test_daily_cap_respected(self):
+        from automation.tennis_both_overs import build_tennis_both_overs_entries, TennisBothOversPolicy
+
+        now = datetime(2026, 9, 15, 16, tzinfo=timezone.utc)
+        game_time = (now + timedelta(hours=2)).isoformat()
+        props = [
+            self._tennis_prop("t1", "Player A", "Games Won", 10.5, game_time),
+            self._tennis_prop("t2", "Player B", "Games Won", 9.5, game_time),
+        ]
+        result = build_tennis_both_overs_entries(
+            props,
+            policy=TennisBothOversPolicy(stake=10, daily_cap=5, match_cap=1),
+            daily_placed=5,
+            now=now,
+        )
+        self.assertEqual(len(result["entries"]), 0)
+        self.assertIn("daily_cap", result["skipped_reasons"])
+
+    def test_match_cap_respected(self):
+        from automation.tennis_both_overs import build_tennis_both_overs_entries, TennisBothOversPolicy
+
+        now = datetime(2026, 9, 15, 16, tzinfo=timezone.utc)
+        game_time = (now + timedelta(hours=2)).isoformat()
+        match_key = f"prizepicks|{game_time}"
+        props = [
+            self._tennis_prop("t1", "Player A", "Games Won", 10.5, game_time),
+            self._tennis_prop("t2", "Player B", "Games Won", 9.5, game_time),
+        ]
+        result = build_tennis_both_overs_entries(
+            props,
+            policy=TennisBothOversPolicy(stake=10, daily_cap=20, match_cap=1),
+            match_placed={match_key: 1},
+            now=now,
+        )
+        self.assertEqual(len(result["entries"]), 0)
+        self.assertIn("match_cap", result["skipped_reasons"])
+
+    def test_total_games_won_stat_accepted(self):
+        from automation.tennis_both_overs import build_tennis_both_overs_entries, TennisBothOversPolicy
+
+        now = datetime(2026, 9, 15, 16, tzinfo=timezone.utc)
+        game_time = (now + timedelta(hours=2)).isoformat()
+        props = [
+            self._tennis_prop("t1", "Player A", "Total Games Won", 11.5, game_time),
+            self._tennis_prop("t2", "Player B", "Total Games Won", 10.5, game_time),
+        ]
+        result = build_tennis_both_overs_entries(
+            props,
+            policy=TennisBothOversPolicy(stake=10, daily_cap=20, match_cap=1),
+            now=now,
+        )
+        self.assertEqual(len(result["entries"]), 1)
+
+    def test_non_games_won_stat_ignored(self):
+        from automation.tennis_both_overs import build_tennis_both_overs_entries, TennisBothOversPolicy
+
+        now = datetime(2026, 9, 15, 16, tzinfo=timezone.utc)
+        game_time = (now + timedelta(hours=2)).isoformat()
+        props = [
+            self._tennis_prop("t1", "Player A", "Aces", 5.5, game_time),
+            self._tennis_prop("t2", "Player B", "Aces", 4.5, game_time),
+        ]
+        result = build_tennis_both_overs_entries(
+            props,
+            policy=TennisBothOversPolicy(stake=10, daily_cap=20, match_cap=1),
+            now=now,
+        )
+        self.assertEqual(len(result["entries"]), 0)
+
+    def test_too_close_to_start_rejected(self):
+        from automation.tennis_both_overs import build_tennis_both_overs_entries, TennisBothOversPolicy
+
+        now = datetime(2026, 9, 15, 16, tzinfo=timezone.utc)
+        game_time = (now + timedelta(minutes=3)).isoformat()
+        props = [
+            self._tennis_prop("t1", "Player A", "Games Won", 10.5, game_time),
+            self._tennis_prop("t2", "Player B", "Games Won", 9.5, game_time),
+        ]
+        result = build_tennis_both_overs_entries(
+            props,
+            policy=TennisBothOversPolicy(stake=10, daily_cap=20, match_cap=1),
+            now=now,
+        )
+        self.assertEqual(len(result["entries"]), 0)
+        self.assertIn("too_close_to_start", result["skipped_reasons"])
+
+    def test_event_id_pairing_across_platforms(self):
+        from automation.tennis_both_overs import build_tennis_both_overs_entries, TennisBothOversPolicy
+
+        now = datetime(2026, 9, 15, 16, tzinfo=timezone.utc)
+        game_time = (now + timedelta(hours=2)).isoformat()
+        props = [
+            self._tennis_prop("t1", "Player A", "Games Won", 10.5, game_time, platform="underdog", event_id="match-99"),
+            self._tennis_prop("t2", "Player B", "Games Won", 9.5, game_time, platform="underdog", event_id="match-99"),
+        ]
+        result = build_tennis_both_overs_entries(
+            props,
+            policy=TennisBothOversPolicy(stake=10, daily_cap=20, match_cap=1),
+            now=now,
+        )
+        self.assertEqual(len(result["entries"]), 1)
+        self.assertEqual(result["entries"][0]["platform"], "underdog")
+
+
 if __name__ == "__main__":
     unittest.main()
 

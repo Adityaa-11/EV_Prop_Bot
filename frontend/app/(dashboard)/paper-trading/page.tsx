@@ -324,6 +324,41 @@ export default function PaperTradingPage() {
         </div>
       </Card>
 
+      {data?.tennis_both_overs && (
+        <Card className="mt-4 border-emerald-500/30 p-4">
+          <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+            <div className="flex items-center gap-3">
+              <span className="text-lg">🎾</span>
+              <div>
+                <p className="font-semibold">
+                  Tennis Both-Overs
+                  <Badge variant="outline" className="ml-2">EXPERIMENT</Badge>
+                  <Badge
+                    variant={data.tennis_both_overs.enabled ? "default" : "secondary"}
+                    className="ml-2"
+                  >
+                    {data.tennis_both_overs.enabled ? "Enabled" : "Disabled"}
+                  </Badge>
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Same-match, both players OVER Games Won · DFS-board-only
+                </p>
+              </div>
+            </div>
+            <div className="text-right text-xs text-muted-foreground">
+              <p>
+                {data.tennis_both_overs.games_won_props ?? 0} games-won props ·{" "}
+                {data.tennis_both_overs.match_groups ?? 0} matches ·{" "}
+                {data.tennis_both_overs.daily_placed ?? 0} placed today
+              </p>
+              {data.tennis_both_overs.checked_at && (
+                <p>Scanned {new Date(data.tennis_both_overs.checked_at).toLocaleString()}</p>
+              )}
+            </div>
+          </div>
+        </Card>
+      )}
+
       <div className="mb-4 mt-8 flex items-center justify-between">
         <h2 className="text-xl font-semibold">Slip ledger</h2>
         <span className="text-xs text-muted-foreground">Updates every 10 seconds</span>
@@ -361,6 +396,11 @@ export default function PaperTradingPage() {
                   <Badge variant={version === "v3" ? "default" : "outline"}>
                     {version.toUpperCase()}
                   </Badge>
+                  {entry.strategy === "tennis_both_overs_games" && (
+                    <Badge variant="default" className="bg-emerald-600 hover:bg-emerald-700">
+                      🎾 Tennis-v1
+                    </Badge>
+                  )}
                   <Badge variant={entry.delivery_status === "sent" ? "default" : "outline"}>
                     Discord {entry.delivery_status}
                   </Badge>
