@@ -185,7 +185,7 @@ EXECUTION_MODE = os.getenv("EXECUTION_MODE", "paper").lower()
 
 # Tennis both-overs correlation lane (DFS-board-only, separate from V3 EV)
 PAPER_TENNIS_BOTH_OVERS_ENABLED = os.getenv(
-    "PAPER_TENNIS_BOTH_OVERS_ENABLED", "false"
+    "PAPER_TENNIS_BOTH_OVERS_ENABLED", "true"
 ).lower() in {"1", "true", "yes"}
 TENNIS_BOTH_OVERS_POLICY = TennisBothOversPolicy()
 LIVE_EXECUTION_ENABLED = os.getenv("LIVE_EXECUTION_ENABLED", "false").lower() in {
