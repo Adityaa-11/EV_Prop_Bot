@@ -119,7 +119,7 @@ export interface PaperEntry {
   sport: string
   status: "open" | "settled"
   execution_mode: "paper" | "live"
-  tier: "excellent" | "strong"
+  tier: "excellent" | "strong" | string
   stake: number
   expected_roi: number
   potential_payout: number
@@ -132,8 +132,22 @@ export interface PaperEntry {
   delivery_status: string
   delivery_attempts?: number
   delivery_error?: string | null
-  paper_version?: "v1" | "v2" | "v3"
+  paper_version?: "v1" | "v2" | "v3" | "tennis-v1" | string
+  strategy?: string | null
   legs: PaperLeg[]
+}
+
+export interface TennisBothOversStatus {
+  enabled: boolean
+  status?: string
+  message?: string | null
+  games_won_props?: number
+  match_groups?: number
+  daily_placed?: number
+  created_count?: number
+  checked_at?: string | null
+  last_scan_at?: string | null
+  seconds_since_scan?: number
 }
 
 export interface PaperEraSummary {
@@ -229,6 +243,7 @@ export interface PaperResponse {
     shadow_mode: boolean
     live_stake: number
   }
+  tennis_both_overs?: TennisBothOversStatus
   updated_at: string
 }
 
