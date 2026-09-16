@@ -41,6 +41,7 @@ export function GameFilters() {
             <SelectItem value="all">All Platforms</SelectItem>
             <SelectItem value="prizepicks">PrizePicks</SelectItem>
             <SelectItem value="underdog">Underdog</SelectItem>
+            <SelectItem value="dabble">Dabble</SelectItem>
             <SelectItem value="sleeper">Sleeper</SelectItem>
             <SelectItem value="betr">Betr</SelectItem>
           </SelectContent>

@@ -264,6 +264,26 @@ class PaperEntryTests(unittest.TestCase):
         rois = [entry["expected_roi"] for entry in result["entries"]]
         self.assertEqual(rois, sorted(rois, reverse=True))
 
+    def test_dabble_platform_pairs_into_v3_paper(self):
+        now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)
+        lock = (now + timedelta(hours=3)).isoformat()
+        a = paper_play("d1", "Dabble One", "event-1", 62, 3, 2, lock)
+        b = paper_play("d2", "Dabble Two", "event-2", 61, 3, 2, lock)
+        a["prop"]["platform"] = "dabble"
+        b["prop"]["platform"] = "dabble"
+        result = build_paper_entries(
+            [a, b],
+            stability_for=lambda _: {"stable": True},
+            policy=PaperPolicy(),
+            daily_staked=0,
+            open_entries=0,
+            now=now,
+        )
+        self.assertEqual(len(result["entries"]), 1)
+        entry = result["entries"][0]
+        self.assertEqual(entry["platform"], "dabble")
+        self.assertAlmostEqual(entry["payout_multiplier"], 3.5)
+
 
     def test_underdog_juiced_side_scales_payout_and_roi(self):
         now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)

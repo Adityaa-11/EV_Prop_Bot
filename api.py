@@ -668,6 +668,12 @@ BREAKEVEN = {
         "2_leg": 60.00,
         "default": 52.38,
     },
+    "dabble": {
+        # GA All-In / Hedge pick'em. 2-leg All-In often ~3.5x → ~53.5% BE;
+        # keep conservative default near PP 2-power until live multipliers are captured.
+        "2_power": 53.45,
+        "default": 53.45,
+    },
     "sleeper": {
         "default": 54.00,  # Approximate, needs verification
     },
@@ -906,6 +912,7 @@ async def fetch_prizepicks_direct(
 DFS_BOOKMAKER_KEYS = {
     "prizepicks": "prizepicks",
     "underdog": "underdog",
+    "dabble": "dabble_us_dfs",
     "betr": "betr_us_dfs",
 }
 
@@ -1496,6 +1503,64 @@ async def fetch_betr_picks(session: aiohttp.ClientSession, sport: str) -> list[P
     return []
     # return await fetch_dfs_props_from_odds_api(session, sport, "betr")
 
+
+async def fetch_dabble(session: aiohttp.ClientSession, sport: str) -> list[Prop]:
+    """Fetch Dabble US pick'em props via The Odds API ``us_dfs`` / ``dabble_us_dfs``.
+
+    Dabble's consumer app/API is Cloudflare-gated from datacenter IPs, so we use
+    The Odds API DFS region (same path as PP/UD fallback). GA residents can play
+    Dabble All-In/Hedge; these props feed V3 EV + paper pairing.
+    """
+    enabled = os.getenv("DABBLE_ENABLED", "true").lower() in {"1", "true", "yes"}
+    if not enabled:
+        _record_feed_health(
+            "dabble",
+            status="disabled",
+            source="odds_api_dfs",
+            count=0,
+            detail="DABBLE_ENABLED=false",
+            sport=sport.upper(),
+        )
+        return []
+
+    prop_sport = sport.upper()
+    try:
+        props = await fetch_dfs_props_from_odds_api(session, sport, "dabble")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[Dabble] Odds API DFS failed for {prop_sport}: {exc}")
+        _record_feed_health(
+            "dabble",
+            status="error",
+            source="odds_api_dfs",
+            count=0,
+            detail=str(exc)[:200],
+            sport=prop_sport,
+        )
+        return []
+
+    if props:
+        print(f"[Dabble] Got {len(props)} props from Odds API for {prop_sport}")
+        _record_feed_health(
+            "dabble",
+            status="ok",
+            source="odds_api_dfs",
+            count=len(props),
+            detail=None,
+            sport=prop_sport,
+        )
+    else:
+        print(f"[Dabble] Odds API DFS returned 0 props for {prop_sport}")
+        _record_feed_health(
+            "dabble",
+            status="empty",
+            source="odds_api_dfs",
+            count=0,
+            detail="no_dabble_us_dfs_markets",
+            sport=prop_sport,
+        )
+    return props
+
+
 async def fetch_chalkboard(session: aiohttp.ClientSession, sport: str) -> list[Prop]:
     """
     Fetch props from Chalkboard.
@@ -1542,6 +1607,7 @@ async def collect_props(
                 [
                     fetch_prizepicks(session, current_sport),
                     fetch_underdog(session, current_sport),
+                    fetch_dabble(session, current_sport),
                     fetch_betr_picks(session, current_sport),
                     fetch_chalkboard(session, current_sport),
                 ]
@@ -2026,10 +2092,10 @@ async def hermes_scan(
             detail=f"sport must be one of {sorted(ODDS_API_SPORTS)}; scan sports separately",
         )
     normalized_platform = platform.lower()
-    if normalized_platform not in {"all", "prizepicks", "underdog"}:
+    if normalized_platform not in {"all", "prizepicks", "underdog", "dabble"}:
         raise HTTPException(
             status_code=422,
-            detail="platform must be all, prizepicks, or underdog",
+            detail="platform must be all, prizepicks, underdog, or dabble",
         )
     return await get_ev_plays(
         sport=normalized_sport,
@@ -2200,7 +2266,7 @@ def _record_feed_health(
 def _feed_health_snapshot() -> dict[str, Any]:
     return {
         platform: store.get_state(f"feed_health:{platform}") or {"status": "unknown"}
-        for platform in ("underdog", "prizepicks")
+        for platform in ("underdog", "prizepicks", "dabble")
     }
 
 
@@ -3489,6 +3555,8 @@ async def health():
         "platforms": {
             "prizepicks": bool(get_odds_api_key()),
             "underdog": True,
+            "dabble": bool(get_odds_api_key())
+            and os.getenv("DABBLE_ENABLED", "true").lower() in {"1", "true", "yes"},
             "chalkboard": False,
             "betr": False,
         }
@@ -3949,57 +4017,80 @@ async def get_middles(
     
     async with aiohttp.ClientSession() as session:
         all_props, _ = await collect_props(session, sport, refresh=refresh)
-        pp_props = [prop for prop in all_props if prop.platform == "prizepicks"]
-        ud_props = [prop for prop in all_props if prop.platform == "underdog"]
+        platforms = ("prizepicks", "underdog", "dabble")
+        by_platform = {
+            name: [prop for prop in all_props if prop.platform == name]
+            for name in platforms
+        }
         middles = []
+        seen_pairs: set[tuple[str, str, str, str]] = set()
 
-        # Match on sport + canonical market, then fuzzy-match the player name.
-        for pp_prop in pp_props:
-            pp_market = pp_prop.market_key or market_for_stat(pp_prop.stat_type, pp_prop.sport)
-            candidates = [
-                prop
-                for prop in ud_props
-                if prop.sport == pp_prop.sport
-                and (prop.market_key or market_for_stat(prop.stat_type, prop.sport)) == pp_market
-            ]
-            matched_name = match_player(pp_prop.player_name, [prop.player_name for prop in candidates])
-            if not matched_name:
-                continue
-            ud_prop = next(prop for prop in candidates if prop.player_name == matched_name)
-            spread = abs(pp_prop.line - ud_prop.line)
-            if spread <= 0:
-                continue
+        # Pairwise cross-platform line gaps (PP/UD/Dabble).
+        for left_name, right_name in (
+            ("prizepicks", "underdog"),
+            ("prizepicks", "dabble"),
+            ("underdog", "dabble"),
+        ):
+            left_props = by_platform[left_name]
+            right_props = by_platform[right_name]
+            for left_prop in left_props:
+                left_market = left_prop.market_key or market_for_stat(left_prop.stat_type, left_prop.sport)
+                candidates = [
+                    prop
+                    for prop in right_props
+                    if prop.sport == left_prop.sport
+                    and (prop.market_key or market_for_stat(prop.stat_type, prop.sport)) == left_market
+                ]
+                matched_name = match_player(
+                    left_prop.player_name,
+                    [prop.player_name for prop in candidates],
+                )
+                if not matched_name:
+                    continue
+                right_prop = next(prop for prop in candidates if prop.player_name == matched_name)
+                spread = abs(left_prop.line - right_prop.line)
+                if spread <= 0:
+                    continue
+                pair_key = (
+                    left_prop.sport,
+                    str(left_market),
+                    matched_name.lower(),
+                    "|".join(sorted([left_name, right_name])),
+                )
+                if pair_key in seen_pairs:
+                    continue
+                seen_pairs.add(pair_key)
 
-            if pp_prop.line > ud_prop.line:
-                high_platform, high_line = "prizepicks", pp_prop.line
-                low_platform, low_line = "underdog", ud_prop.line
-            else:
-                high_platform, high_line = "underdog", ud_prop.line
-                low_platform, low_line = "prizepicks", pp_prop.line
+                if left_prop.line > right_prop.line:
+                    high_platform, high_line = left_name, left_prop.line
+                    low_platform, low_line = right_name, right_prop.line
+                else:
+                    high_platform, high_line = right_name, right_prop.line
+                    low_platform, low_line = left_name, left_prop.line
 
-            middle_zone = []
-            current = low_line + 0.5
-            while current < high_line:
-                middle_zone.append(round(current, 2))
-                current += 0.5
+                middle_zone = []
+                current = low_line + 0.5
+                while current < high_line:
+                    middle_zone.append(round(current, 2))
+                    current += 0.5
 
-            middles.append({
-                "player_name": pp_prop.player_name,
-                "stat_type": pp_prop.stat_type,
-                "sport": pp_prop.sport,
-                "platform_a": {
-                    "name": high_platform,
-                    "line": high_line,
-                    "recommended": "UNDER",
-                },
-                "platform_b": {
-                    "name": low_platform,
-                    "line": low_line,
-                    "recommended": "OVER",
-                },
-                "spread": spread,
-                "middle_zone": middle_zone,
-            })
+                middles.append({
+                    "player_name": left_prop.player_name,
+                    "stat_type": left_prop.stat_type,
+                    "sport": left_prop.sport,
+                    "platform_a": {
+                        "name": high_platform,
+                        "line": high_line,
+                        "recommended": "UNDER",
+                    },
+                    "platform_b": {
+                        "name": low_platform,
+                        "line": low_line,
+                        "recommended": "OVER",
+                    },
+                    "spread": spread,
+                    "middle_zone": middle_zone,
+                })
         
         middles.sort(key=lambda x: x["spread"], reverse=True)
         
@@ -4098,6 +4189,7 @@ async def get_games(
             "platforms": {
                 "prizepicks": sum(1 for prop in all_props if prop.platform == "prizepicks"),
                 "underdog": sum(1 for prop in all_props if prop.platform == "underdog"),
+                "dabble": sum(1 for prop in all_props if prop.platform == "dabble"),
             },
             "games": sorted(
                 games_by_key.values(),

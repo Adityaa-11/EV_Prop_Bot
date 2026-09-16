@@ -113,7 +113,7 @@ export default function GamesPage() {
       {!loading && !error && data && (
         <div className="space-y-6">
           {/* Summary Cards */}
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
             <Card className="p-4">
               <div className="text-sm text-muted-foreground">Sport</div>
               <div className="mt-1 text-2xl font-bold">{data.sport}</div>
@@ -129,6 +129,10 @@ export default function GamesPage() {
             <Card className="p-4">
               <div className="text-sm text-muted-foreground">Underdog</div>
               <div className="mt-1 text-2xl font-bold">{data.platforms.underdog}</div>
+            </Card>
+            <Card className="p-4">
+              <div className="text-sm text-muted-foreground">Dabble</div>
+              <div className="mt-1 text-2xl font-bold">{data.platforms.dabble ?? 0}</div>
             </Card>
           </div>
 

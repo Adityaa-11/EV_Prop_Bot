@@ -115,7 +115,7 @@ export interface PaperLeg {
 
 export interface PaperEntry {
   id: string
-  platform: "prizepicks" | "underdog"
+  platform: "prizepicks" | "underdog" | "dabble"
   sport: string
   status: "open" | "settled"
   execution_mode: "paper" | "live"
@@ -308,6 +308,7 @@ export interface GamesResponse {
   platforms: {
     prizepicks: number
     underdog: number
+    dabble?: number
   }
 }
 
@@ -318,6 +319,7 @@ export interface HealthResponse {
   platforms: {
     prizepicks: boolean
     underdog: boolean
+    dabble?: boolean
     chalkboard: boolean
     betr: boolean
   }

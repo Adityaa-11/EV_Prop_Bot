@@ -107,6 +107,7 @@ export default function PropsPage() {
             <SelectItem value="all">All Platforms</SelectItem>
             <SelectItem value="prizepicks">PrizePicks</SelectItem>
             <SelectItem value="underdog">Underdog</SelectItem>
+            <SelectItem value="dabble">Dabble</SelectItem>
             <SelectItem value="betr">Betr</SelectItem>
           </SelectContent>
         </Select>

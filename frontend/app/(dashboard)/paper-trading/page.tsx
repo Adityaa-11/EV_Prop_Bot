@@ -387,7 +387,13 @@ export default function PaperTradingPage() {
             <Card key={entry.id} className="overflow-hidden">
               <div className="flex flex-col justify-between gap-3 border-b p-5 sm:flex-row sm:items-center">
                 <div className="flex flex-wrap items-center gap-2">
-                  <Badge>{entry.platform === "prizepicks" ? "PrizePicks" : "Underdog"}</Badge>
+                  <Badge>
+                    {entry.platform === "prizepicks"
+                      ? "PrizePicks"
+                      : entry.platform === "dabble"
+                        ? "Dabble"
+                        : "Underdog"}
+                  </Badge>
                   <Badge variant="outline">{entry.sport}</Badge>
                   <Badge variant={entry.tier === "excellent" ? "default" : "secondary"}>
                     {entry.tier}

@@ -13,6 +13,12 @@ def webhook_for_platform(platform: str) -> str | None:
         return os.getenv("DISCORD_WEBHOOK_PRIZEPICKS")
     if platform == "underdog":
         return os.getenv("DISCORD_WEBHOOK_UNDERDOG")
+    if platform == "dabble":
+        return (
+            os.getenv("DISCORD_WEBHOOK_DABBLE")
+            or os.getenv("DISCORD_WEBHOOK_UNDERDOG")
+            or os.getenv("DISCORD_WEBHOOK_PRIZEPICKS")
+        )
     return None
 
 
