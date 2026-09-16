@@ -539,6 +539,7 @@ PROP_MAPPINGS = {
     # MLB
     "Strikeouts": "pitcher_strikeouts",
     "Pitcher Strikeouts": "pitcher_strikeouts",
+    "Pitcher Total Outs": "pitcher_outs",
     "Hits Allowed": "pitcher_hits_allowed",
     "Earned Runs": "pitcher_earned_runs",
     "Walks Allowed": "pitcher_walks",
@@ -552,6 +553,12 @@ PROP_MAPPINGS = {
     "Hits+Runs+RBIs": "batter_hits_runs_rbis",
     "H+R+RBI": "batter_hits_runs_rbis",
     "Singles": "batter_singles",
+    # Dabble / tennis DFS labels
+    "Match Total Games": "tennis_games_won",
+    "Games Won": "tennis_games_won",
+    "Total Games Won": "tennis_games_won",
+    "Aces": "player_aces",
+    "Break Points Won": "player_break_points_won",
     
     # NHL
     "Shots On Goal": "player_shots_on_goal",
@@ -669,10 +676,9 @@ BREAKEVEN = {
         "default": 52.38,
     },
     "dabble": {
-        # GA All-In / Hedge pick'em. 2-leg All-In often ~3.5x → ~53.5% BE;
-        # keep conservative default near PP 2-power until live multipliers are captured.
-        "2_power": 53.45,
-        "default": 53.45,
+        # Live All-In 2-leg baseMultiplier is 3.0 → per-leg BE ≈ 57.74%.
+        "2_power": 57.74,
+        "default": 57.74,
     },
     "sleeper": {
         "default": 54.00,  # Approximate, needs verification
@@ -1504,19 +1510,215 @@ async def fetch_betr_picks(session: aiohttp.ClientSession, sport: str) -> list[P
     # return await fetch_dfs_props_from_odds_api(session, sport, "betr")
 
 
-async def fetch_dabble(session: aiohttp.ClientSession, sport: str) -> list[Prop]:
-    """Fetch Dabble US pick'em props via The Odds API ``us_dfs`` / ``dabble_us_dfs``.
+# Dabble US mobile board (same JSON the app uses). Public, no auth for board reads.
+DABBLE_API_BASE = os.getenv("DABBLE_API_BASE", "https://api.dabble.com").rstrip("/")
+# sport query key -> competition displayName / name matchers (case-insensitive).
+DABBLE_SPORT_COMPETITIONS: dict[str, tuple[str, ...]] = {
+    "mlb": ("mlb", "us major league baseball"),
+    "nfl": ("nfl",),
+    "nba": ("nba",),
+    "wnba": ("wnba",),
+    "ncaaf": ("cfb", "ncaaf", "college football"),
+    "cfb": ("cfb", "ncaaf", "college football"),
+    "nhl": ("nhl",),
+    "tennis": ("tennis", "tennis w", "tennis m", "atp", "wta"),
+    "pga": ("pga", "golf"),
+    "epl": ("epl", "premier league"),
+    "soccer": ("epl", "premier league", "laliga", "bundesliga", "serie a", "ligue 1"),
+}
 
-    Dabble's consumer app/API is Cloudflare-gated from datacenter IPs, so we use
-    The Odds API DFS region (same path as PP/UD fallback). GA residents can play
-    Dabble All-In/Hedge; these props feed V3 EV + paper pairing.
+
+def _dabble_decimal_to_american(price: float) -> int | None:
+    if price <= 1.0:
+        return None
+    if price >= 2.0:
+        return int(round((price - 1.0) * 100))
+    return int(round(-100.0 / (price - 1.0)))
+
+
+def _dabble_headers() -> dict[str, str]:
+    return {
+        "User-Agent": "Dabble/4.25.2 (com.dabblesports.us_fantasy; Android 14)",
+        "Accept": "application/json",
+        "x-app-version": "4.25.2",
+        "x-platform": "android",
+        "x-region": "US",
+        "x-country": "US",
+    }
+
+
+async def _dabble_get_json(
+    session: aiohttp.ClientSession,
+    path: str,
+    params: dict[str, Any] | None = None,
+) -> Any:
+    url = f"{DABBLE_API_BASE}{path}"
+    timeout = aiohttp.ClientTimeout(total=25)
+    async with session.get(
+        url,
+        params=params,
+        headers=_dabble_headers(),
+        timeout=timeout,
+    ) as resp:
+        if resp.status != 200:
+            body = await resp.text()
+            raise RuntimeError(f"HTTP {resp.status} on {path}: {body[:160]}")
+        return await resp.json(content_type=None)
+
+
+async def fetch_dabble_direct(session: aiohttp.ClientSession, sport: str) -> list[Prop]:
+    """Fetch Dabble US DFS pick'em props from api.dabble.com (app board API)."""
+    sport_l = sport.lower().strip()
+    matchers = DABBLE_SPORT_COMPETITIONS.get(sport_l)
+    if not matchers:
+        return []
+
+    active_payload = await _dabble_get_json(session, "/competitions/active")
+    active = (
+        (active_payload.get("data") or {}).get("activeCompetitions")
+        if isinstance(active_payload, dict)
+        else None
+    )
+    if not isinstance(active, list):
+        return []
+
+    competitions: list[dict[str, Any]] = []
+    for comp in active:
+        label = str(comp.get("displayName") or comp.get("name") or "").strip().lower()
+        if any(m in label for m in matchers):
+            competitions.append(comp)
+    if not competitions:
+        return []
+
+    prop_sport = sport_l.upper()
+    captured_at = datetime.now(timezone.utc).isoformat()
+    props: list[Prop] = []
+    seen: set[str] = set()
+    max_pages = max(1, int(os.getenv("DABBLE_PROP_MAX_PAGES", "40")))
+
+    for comp in competitions:
+        comp_id = str(comp.get("id") or "")
+        if not comp_id:
+            continue
+        try:
+            groups_payload = await _dabble_get_json(
+                session,
+                f"/search/dfs/competitions/{comp_id}/market-groups",
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[Dabble Direct] market-groups failed for {comp_id}: {exc}")
+            continue
+        groups = groups_payload.get("data") if isinstance(groups_payload, dict) else None
+        if not isinstance(groups, list):
+            continue
+
+        for group in groups:
+            market_name = str(group.get("marketGroupName") or "").strip()
+            if not market_name:
+                continue
+            cursor: str | None = None
+            for _ in range(max_pages):
+                params: dict[str, Any] = {"marketGroupName": market_name}
+                if cursor:
+                    params["next"] = cursor
+                try:
+                    page = await _dabble_get_json(
+                        session,
+                        f"/search/dfs/competitions/{comp_id}/props",
+                        params=params,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    print(
+                        f"[Dabble Direct] props failed {comp_id}/{market_name}: {exc}"
+                    )
+                    break
+                rows = page.get("data") if isinstance(page, dict) else None
+                if not isinstance(rows, list) or not rows:
+                    break
+                for row in rows:
+                    if not isinstance(row, dict) or not row.get("isDisplayed", True):
+                        continue
+                    if str(row.get("marketStatus") or "").lower() not in {"", "open"}:
+                        continue
+                    player = str(row.get("playerName") or "").strip()
+                    line_raw = row.get("propValue")
+                    if not player or line_raw is None:
+                        continue
+                    try:
+                        line = float(line_raw)
+                    except (TypeError, ValueError):
+                        continue
+                    prop_id = str(row.get("id") or "").strip()
+                    if not prop_id:
+                        prop_id = _safe_id(
+                            "dabble",
+                            prop_sport,
+                            market_name,
+                            player,
+                            str(line),
+                            str(row.get("fixtureId") or ""),
+                        )
+                    if prop_id in seen:
+                        continue
+                    seen.add(prop_id)
+
+                    options = {
+                        str(opt.get("type") or "").lower(): opt
+                        for opt in (row.get("selectionOptions") or [])
+                        if isinstance(opt, dict)
+                    }
+                    over_opt = options.get("more") or options.get("over") or options.get("higher")
+                    under_opt = options.get("less") or options.get("under") or options.get("lower")
+                    over_american = under_american = None
+                    try:
+                        if over_opt and over_opt.get("price") is not None:
+                            over_american = _dabble_decimal_to_american(float(over_opt["price"]))
+                        if under_opt and under_opt.get("price") is not None:
+                            under_american = _dabble_decimal_to_american(float(under_opt["price"]))
+                    except (TypeError, ValueError):
+                        pass
+
+                    team = str(row.get("teamAbbreviation") or row.get("teamName") or "").strip()
+                    fixture_name = str(
+                        row.get("fixtureDisplayName") or row.get("fixtureName") or ""
+                    ).strip()
+                    props.append(
+                        Prop(
+                            id=prop_id,
+                            player_name=player,
+                            team=team,
+                            opponent=fixture_name or None,
+                            sport=prop_sport,
+                            stat_type=market_name,
+                            platform="dabble",
+                            line=line,
+                            game_time=row.get("fixtureDate"),
+                            event_id=str(row.get("fixtureId") or "") or None,
+                            market_key=market_for_stat(market_name, sport_l),
+                            over_american_price=over_american,
+                            under_american_price=under_american,
+                            captured_at=captured_at,
+                        )
+                    )
+                cursor = page.get("next") if isinstance(page, dict) else None
+                if not cursor:
+                    break
+
+    return props
+
+
+async def fetch_dabble(session: aiohttp.ClientSession, sport: str) -> list[Prop]:
+    """Fetch Dabble US pick'em props from the public app board API.
+
+    Prefer ``api.dabble.com`` (same feed the US Android/iOS app uses). Odds API
+    ``dabble_us_dfs`` remains an optional fallback only.
     """
     enabled = os.getenv("DABBLE_ENABLED", "true").lower() in {"1", "true", "yes"}
     if not enabled:
         _record_feed_health(
             "dabble",
             status="disabled",
-            source="odds_api_dfs",
+            source="direct",
             count=0,
             detail="DABBLE_ENABLED=false",
             sport=sport.upper(),
@@ -1524,38 +1726,73 @@ async def fetch_dabble(session: aiohttp.ClientSession, sport: str) -> list[Prop]
         return []
 
     prop_sport = sport.upper()
+    direct_error: str | None = None
+    try:
+        props = await fetch_dabble_direct(session, sport)
+        if props:
+            print(f"[Dabble] Got {len(props)} props from api.dabble.com for {prop_sport}")
+            _record_feed_health(
+                "dabble",
+                status="ok",
+                source="api.dabble.com",
+                count=len(props),
+                detail=None,
+                sport=prop_sport,
+            )
+            return props
+        direct_error = "empty_board"
+        print(f"[Dabble] Direct board returned 0 props for {prop_sport}")
+    except Exception as exc:  # noqa: BLE001
+        direct_error = f"{type(exc).__name__}: {exc}"[:200]
+        print(f"[Dabble] Direct board failed for {prop_sport}: {exc}")
+
+    allow_odds_fallback = os.getenv("DABBLE_ODDS_API_FALLBACK", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    if not allow_odds_fallback or not get_odds_api_key():
+        _record_feed_health(
+            "dabble",
+            status="empty" if direct_error == "empty_board" else "error",
+            source="api.dabble.com",
+            count=0,
+            detail=direct_error,
+            sport=prop_sport,
+        )
+        return []
+
     try:
         props = await fetch_dfs_props_from_odds_api(session, sport, "dabble")
     except Exception as exc:  # noqa: BLE001
-        print(f"[Dabble] Odds API DFS failed for {prop_sport}: {exc}")
+        print(f"[Dabble] Odds API DFS fallback failed for {prop_sport}: {exc}")
         _record_feed_health(
             "dabble",
             status="error",
             source="odds_api_dfs",
             count=0,
-            detail=str(exc)[:200],
+            detail=f"direct={direct_error}; odds={exc}"[:200],
             sport=prop_sport,
         )
         return []
 
     if props:
-        print(f"[Dabble] Got {len(props)} props from Odds API for {prop_sport}")
+        print(f"[Dabble] Got {len(props)} props from Odds API fallback for {prop_sport}")
         _record_feed_health(
             "dabble",
-            status="ok",
+            status="fallback",
             source="odds_api_dfs",
             count=len(props),
-            detail=None,
+            detail=direct_error,
             sport=prop_sport,
         )
     else:
-        print(f"[Dabble] Odds API DFS returned 0 props for {prop_sport}")
         _record_feed_health(
             "dabble",
             status="empty",
             source="odds_api_dfs",
             count=0,
-            detail="no_dabble_us_dfs_markets",
+            detail=f"direct={direct_error}; odds_empty",
             sport=prop_sport,
         )
     return props
@@ -2922,6 +3159,7 @@ async def run_tennis_both_overs_tick() -> dict[str, Any]:
         for fetcher, sport_arg in [
             (fetch_prizepicks, "tennis"),
             (fetch_underdog, "tennis"),
+            (fetch_dabble, "tennis"),
         ]:
             try:
                 result = await fetcher(session, sport_arg)
@@ -3555,8 +3793,7 @@ async def health():
         "platforms": {
             "prizepicks": bool(get_odds_api_key()),
             "underdog": True,
-            "dabble": bool(get_odds_api_key())
-            and os.getenv("DABBLE_ENABLED", "true").lower() in {"1", "true", "yes"},
+            "dabble": os.getenv("DABBLE_ENABLED", "true").lower() in {"1", "true", "yes"},
             "chalkboard": False,
             "betr": False,
         }

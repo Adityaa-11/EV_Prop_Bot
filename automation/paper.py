@@ -37,8 +37,8 @@ class PaperPolicy:
 PAYOUTS = {
     "prizepicks": {2: 3.0},
     "underdog": {2: 3.0},
-    # Dabble GA All-In 2-pick is commonly ~3.5x; still tagged into V3 paper ledger.
-    "dabble": {2: float(os.getenv("PAPER_DABBLE_2LEG_PAYOUT", "3.5"))},
+    # Dabble GA All-In 2-pick live baseMultiplier is 3.0 (api.dabble.com/dfs-dividends/multipliers).
+    "dabble": {2: float(os.getenv("PAPER_DABBLE_2LEG_PAYOUT", "3.0"))},
 }
 
 

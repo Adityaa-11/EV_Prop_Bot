@@ -29,6 +29,9 @@ GAMES_WON_STAT_TYPES = frozenset({
     "games won",
     "total games won",
     "games",
+    # Dabble sometimes labels player game lines this way; match-total boards
+    # are filtered out separately when both legs share one line/market.
+    "player games won",
 })
 
 

@@ -282,7 +282,7 @@ class PaperEntryTests(unittest.TestCase):
         self.assertEqual(len(result["entries"]), 1)
         entry = result["entries"][0]
         self.assertEqual(entry["platform"], "dabble")
-        self.assertAlmostEqual(entry["payout_multiplier"], 3.5)
+        self.assertAlmostEqual(entry["payout_multiplier"], 3.0)
 
 
     def test_underdog_juiced_side_scales_payout_and_roi(self):
