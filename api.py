@@ -550,9 +550,12 @@ PROP_MAPPINGS = {
     "Home Runs": "batter_home_runs",
     "Stolen Bases": "batter_stolen_bases",
     "Hits + Runs + RBIs": "batter_hits_runs_rbis",
+    "Hits + Runs + RBI": "batter_hits_runs_rbis",  # Dabble singular
     "Hits+Runs+RBIs": "batter_hits_runs_rbis",
     "H+R+RBI": "batter_hits_runs_rbis",
     "Singles": "batter_singles",
+    "Batter Walks": "batter_walks",
+    "Pitcher Earned Runs": "pitcher_earned_runs",
     # Dabble / tennis DFS labels
     "Match Total Games": "tennis_games_won",
     "Games Won": "tennis_games_won",
@@ -658,6 +661,14 @@ def market_for_stat(stat_type: str, sport: str) -> str | None:
 
 def canonical_market_key(market_key: str) -> str:
     return market_key.removesuffix("_alternate")
+
+
+def _is_odds_api_event_id(event_id: str | None) -> bool:
+    """True for The Odds API 32-char hex event ids (not Dabble/PP fixture ids)."""
+    if not event_id:
+        return False
+    eid = str(event_id).lower()
+    return len(eid) == 32 and all(ch in "0123456789abcdef" for ch in eid)
 
 # Break-even percentages by platform and slip type
 BREAKEVEN = {
@@ -1682,6 +1693,10 @@ async def fetch_dabble_direct(session: aiohttp.ClientSession, sport: str) -> lis
                     fixture_name = str(
                         row.get("fixtureDisplayName") or row.get("fixtureName") or ""
                     ).strip()
+                    # Do NOT set event_id to Dabble fixture UUIDs. EV matching joins
+                    # against The Odds API event ids; a foreign id zeros out
+                    # relevant_odds and Dabble never becomes a paper candidate.
+                    # Same pattern as PrizePicks / Underdog direct board parses.
                     props.append(
                         Prop(
                             id=prop_id,
@@ -1693,7 +1708,7 @@ async def fetch_dabble_direct(session: aiohttp.ClientSession, sport: str) -> lis
                             platform="dabble",
                             line=line,
                             game_time=row.get("fixtureDate"),
-                            event_id=str(row.get("fixtureId") or "") or None,
+                            event_id=None,
                             market_key=market_for_stat(market_name, sport_l),
                             over_american_price=over_american,
                             under_american_price=under_american,
@@ -2140,7 +2155,11 @@ def build_consensus(prop: Prop, odds_rows: list[dict]) -> dict[str, Any] | None:
     """
     player_rows = []
     for row in odds_rows:
-        if prop.event_id and row.get("event_id") and row["event_id"] != prop.event_id:
+        if (
+            _is_odds_api_event_id(prop.event_id)
+            and row.get("event_id")
+            and row["event_id"] != prop.event_id
+        ):
             continue
         if abs(float(row["line"]) - prop.line) > 0.001:
             continue
@@ -4120,7 +4139,13 @@ async def get_ev_plays(
                 row
                 for row in all_odds
                 if row["market"] == market
-                and (not prop.event_id or row.get("event_id") == prop.event_id)
+                # Only join on event_id when the DFS prop carries an Odds API id.
+                # Dabble fixture UUIDs must match via player + market + exact line.
+                and (
+                    not _is_odds_api_event_id(prop.event_id)
+                    or not row.get("event_id")
+                    or row.get("event_id") == prop.event_id
+                )
             ]
             relevant_odds.sort(key=lambda x: 0 if x.get("is_sharp") else 1)
             

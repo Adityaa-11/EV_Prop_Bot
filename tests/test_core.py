@@ -82,7 +82,7 @@ class CoreScoringTests(unittest.TestCase):
             stat_type="Hits",
             platform="prizepicks",
             line=0.5,
-            event_id="event-1",
+            event_id="72854b76ef219e56254f54563177c407",
             market_key="batter_hits",
         )
         rows = [
@@ -92,7 +92,7 @@ class CoreScoringTests(unittest.TestCase):
                 "over_odds": -130,
                 "under_odds": 100,
                 "bookmaker": "draftkings",
-                "event_id": "event-1",
+                "event_id": "72854b76ef219e56254f54563177c407",
             },
             {
                 "player": "Example Player",
@@ -100,7 +100,7 @@ class CoreScoringTests(unittest.TestCase):
                 "over_odds": -120,
                 "under_odds": -105,
                 "bookmaker": "fanduel",
-                "event_id": "event-1",
+                "event_id": "72854b76ef219e56254f54563177c407",
             },
             {
                 "player": "Example Player",
@@ -108,7 +108,7 @@ class CoreScoringTests(unittest.TestCase):
                 "over_odds": 200,
                 "under_odds": -250,
                 "bookmaker": "bovada",
-                "event_id": "event-1",
+                "event_id": "72854b76ef219e56254f54563177c407",
             },
             {
                 "player": "Example Player",
@@ -116,7 +116,7 @@ class CoreScoringTests(unittest.TestCase):
                 "over_odds": 200,
                 "under_odds": -250,
                 "bookmaker": "bovada",
-                "event_id": "event-2",
+                "event_id": "0d06cbc7e9e97876c9db1d264ac9c762",
             },
         ]
 
@@ -126,6 +126,49 @@ class CoreScoringTests(unittest.TestCase):
         self.assertEqual(consensus["book_count"], 2)
         self.assertEqual(len(consensus["exact_line_odds"]), 2)
         self.assertEqual(consensus["recommended_play"], "OVER")
+
+    def test_dabble_fixture_event_id_does_not_block_consensus(self):
+        """Dabble fixture UUIDs must not zero out sharp-book matching."""
+        prop = Prop(
+            id="dabble-1",
+            player_name="Example Player",
+            team="AAA",
+            sport="MLB",
+            stat_type="Hits",
+            platform="dabble",
+            line=0.5,
+            event_id="01a0889d-5396-76d6-9d76-7a52adbe0e4a",
+            market_key="batter_hits",
+        )
+        rows = [
+            {
+                "player": "Example Player",
+                "line": 0.5,
+                "over_odds": -130,
+                "under_odds": 100,
+                "bookmaker": "draftkings",
+                "event_id": "72854b76ef219e56254f54563177c407",
+            },
+            {
+                "player": "Example Player",
+                "line": 0.5,
+                "over_odds": -120,
+                "under_odds": -105,
+                "bookmaker": "fanduel",
+                "event_id": "72854b76ef219e56254f54563177c407",
+            },
+            {
+                "player": "Example Player",
+                "line": 0.5,
+                "over_odds": -115,
+                "under_odds": -110,
+                "bookmaker": "betmgm",
+                "event_id": "72854b76ef219e56254f54563177c407",
+            },
+        ]
+        consensus = build_consensus(prop, rows)
+        self.assertIsNotNone(consensus)
+        self.assertEqual(consensus["book_count"], 3)
 
     def test_power_entry_break_even(self):
         result = calculate_entry_ev([57.735, 57.735], {2: 3.0})
