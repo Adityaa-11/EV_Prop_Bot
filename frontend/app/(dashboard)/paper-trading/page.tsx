@@ -158,8 +158,8 @@ export default function PaperTradingPage() {
         <Card className="mb-6 border-orange-500/50 bg-orange-500/10 p-4">
           <p className="font-semibold text-orange-600 dark:text-orange-400">Settlement backlog</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            {data?.settlement_backlog} open entries are waiting on settlement. MLB auto-settles supported
-            markets; use Mark loss below if something is stuck.
+            {data?.settlement_backlog} open entries are waiting on settlement. MLB, NFL, and NCAAF
+            auto-settle from free box scores; use Mark loss below if something is stuck.
           </p>
           <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
             <Input
@@ -217,7 +217,7 @@ export default function PaperTradingPage() {
           <p className="font-semibold text-amber-600 dark:text-amber-400">Capacity reached</p>
           <p className="mt-1 text-sm text-muted-foreground">
             {data?.capacity.open_entries}/{data?.capacity.max_open_entries} open entries — new paper slips are blocked
-            until entries settle or stale non-MLB slips auto-void.
+            until entries settle or unsupported sports auto-void.
           </p>
         </Card>
       )}
@@ -279,7 +279,7 @@ export default function PaperTradingPage() {
         <Card className="p-4">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">Daily scan budget</p>
           <p className="mt-2 font-semibold">
-            {quota?.scans_today ?? 0} / {quota?.scan_cap ?? 500}
+            {quota?.scans_today ?? 0} / {quota?.scan_cap ?? 100}
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
             {quota?.remaining_scans ?? 0} paid scans remaining today

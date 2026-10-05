@@ -42,7 +42,7 @@ from automation import (
     deliver_ops_alert,
     dry_spell_should_alert,
     platform_play_counts,
-    settle_mlb_entries,
+    settle_open_entries,
     should_send_alert,
     void_stale_open_entries,
 )
@@ -144,10 +144,10 @@ LIVE_ENTRY_POLICY = PaperPolicy(
     excellent_roi=float(os.getenv("LIVE_EXCELLENT_ROI", "10")),
     strong_roi=float(os.getenv("LIVE_STRONG_ROI", "5")),
 )
-PAPER_DAILY_SCAN_CAP = int(os.getenv("PAPER_DAILY_SCAN_CAP", "500"))
+PAPER_DAILY_SCAN_CAP = int(os.getenv("PAPER_DAILY_SCAN_CAP", "100"))
 # Keep headroom so far-out NFL/CFB scans cannot exhaust the whole day.
-PAPER_NEAR_LOCK_SCAN_RESERVE = int(os.getenv("PAPER_NEAR_LOCK_SCAN_RESERVE", "80"))
-PAPER_SPORT_DAILY_SCAN_CAP = int(os.getenv("PAPER_SPORT_DAILY_SCAN_CAP", "120"))
+PAPER_NEAR_LOCK_SCAN_RESERVE = int(os.getenv("PAPER_NEAR_LOCK_SCAN_RESERVE", "20"))
+PAPER_SPORT_DAILY_SCAN_CAP = int(os.getenv("PAPER_SPORT_DAILY_SCAN_CAP", "40"))
 # One-shot boot reset token. Change this to force another budget clear on deploy.
 PAPER_SCAN_BUDGET_RESET_TOKEN = os.getenv(
     "PAPER_SCAN_BUDGET_RESET_TOKEN",
@@ -171,8 +171,8 @@ PAPER_SCHEDULER_ENABLED = os.getenv("PAPER_SCHEDULER_ENABLED", "false").lower() 
     "true",
     "yes",
 }
-# Keep paper sports narrow — scanning soccer/CFL/etc. burns the daily scan cap
-# without producing settlable slips.
+# Keep paper sports narrow — scanning soccer/CFL/etc. burns the daily scan cap.
+# MLB/NFL/NCAAF auto-settle from free box-score APIs.
 PAPER_SPORTS = [
     sport.strip().lower()
     for sport in os.getenv(
@@ -2854,24 +2854,11 @@ async def run_paper_delivery() -> dict[str, Any]:
 
 async def run_paper_settlement() -> dict[str, Any]:
     store.freeze_closing_lines_past_lock()
-    open_entries = store.list_open_paper_entries()
-    void_actions = void_stale_open_entries(open_entries)
     settled = 0
     voided = 0
     pending = 0
-    for action in void_actions:
-        if store.apply_settlement(
-            action["entry_id"],
-            result=action["result"],
-            payout=action["payout"],
-            provenance=action.get("provenance"),
-        ):
-            voided += 1
-            settled += 1
-
-    remaining_open = store.list_open_paper_entries()
     async with aiohttp.ClientSession() as session:
-        actions = await settle_mlb_entries(session, remaining_open)
+        actions = await settle_open_entries(session, store.list_open_paper_entries())
     for action in actions:
         if action.get("status") == "settled":
             if store.apply_settlement(
@@ -2884,6 +2871,17 @@ async def run_paper_settlement() -> dict[str, Any]:
                 settled += 1
         else:
             pending += 1
+
+    void_actions = void_stale_open_entries(store.list_open_paper_entries())
+    for action in void_actions:
+        if store.apply_settlement(
+            action["entry_id"],
+            result=action["result"],
+            payout=action["payout"],
+            provenance=action.get("provenance"),
+        ):
+            voided += 1
+            settled += 1
     return {
         "settled": settled,
         "voided": voided,

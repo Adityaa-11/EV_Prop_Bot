@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 from automation.delivery import format_paper_slip
 from automation.paper import PaperPolicy, build_paper_entries
 from automation.scheduler import PaperScheduler
-from automation.settlement import evaluate_leg, settle_mlb_entries
+from automation.settlement import evaluate_leg, settle_espn_entries, settle_mlb_entries
 from storage import PipelineStore
 
 
@@ -234,6 +234,143 @@ class StrongNearLockTests(unittest.TestCase):
         )
         self.assertEqual(len(result["entries"]), 1)
         self.assertEqual(result["entries"][0]["tier"], "strong")
+
+
+class EspnSettlementTests(unittest.IsolatedAsyncioTestCase):
+    async def test_recent_nfl_lock_stays_pending(self):
+        now = datetime.now(timezone.utc)
+        entries = [
+            {
+                "id": "paper-nfl-recent",
+                "status": "open",
+                "sport": "NFL",
+                "stake": 10,
+                "potential_payout": 30,
+                "lock_time": (now - timedelta(hours=1)).isoformat(),
+                "legs": [
+                    {
+                        "player_name": "Joe Burrow",
+                        "market_key": "player_pass_tds",
+                        "side": "OVER",
+                        "entry_line": 1.5,
+                    }
+                ],
+            }
+        ]
+        actions = await settle_espn_entries(object(), entries, now=now)
+        self.assertEqual(actions, [])
+
+    async def test_nfl_two_leg_slip_grades_from_espn_boxscore(self):
+        now = datetime(2026, 10, 5, 1, tzinfo=timezone.utc)
+        lock = datetime(2026, 10, 4, 17, tzinfo=timezone.utc)
+        scoreboard = {
+            "events": [
+                {
+                    "id": "401",
+                    "date": "2026-10-04T17:00:00Z",
+                    "competitions": [{"status": {"type": {"completed": True, "name": "STATUS_FINAL"}}}],
+                }
+            ]
+        }
+        summary = {
+            "boxscore": {
+                "players": [
+                    {
+                        "statistics": [
+                            {
+                                "name": "passing",
+                                "keys": ["passingTouchdowns", "passingYards"],
+                                "athletes": [
+                                    {
+                                        "athlete": {"displayName": "Joe Burrow"},
+                                        "stats": ["1", "428"],
+                                    }
+                                ],
+                            },
+                            {
+                                "name": "receiving",
+                                "keys": ["receptions", "receivingYards"],
+                                "athletes": [
+                                    {
+                                        "athlete": {"displayName": "Jeremiyah Love"},
+                                        "stats": ["1", "12"],
+                                    }
+                                ],
+                            },
+                        ]
+                    }
+                ]
+            }
+        }
+
+        async def fake_fetch(session, url):
+            if "scoreboard" in url:
+                return scoreboard
+            if "summary" in url:
+                return summary
+            return None
+
+        entries = [
+            {
+                "id": "paper-nfl-hit",
+                "status": "open",
+                "sport": "NFL",
+                "stake": 10,
+                "potential_payout": 30,
+                "lock_time": lock.isoformat(),
+                "legs": [
+                    {
+                        "player_name": "Jalon Daniels",
+                        "market_key": "player_pass_tds",
+                        "side": "OVER",
+                        "entry_line": 0.5,
+                    },
+                    {
+                        "player_name": "Jeremiyah Love",
+                        "market_key": "player_receptions",
+                        "side": "UNDER",
+                        "entry_line": 3.5,
+                    },
+                ],
+            },
+            {
+                "id": "paper-nfl-miss",
+                "status": "open",
+                "sport": "NFL",
+                "stake": 10,
+                "potential_payout": 30,
+                "lock_time": lock.isoformat(),
+                "legs": [
+                    {
+                        "player_name": "Joe Burrow",
+                        "market_key": "player_pass_tds",
+                        "side": "OVER",
+                        "entry_line": 1.5,
+                    },
+                    {
+                        "player_name": "Jeremiyah Love",
+                        "market_key": "player_receptions",
+                        "side": "UNDER",
+                        "entry_line": 3.5,
+                    },
+                ],
+            },
+        ]
+        # First slip needs Daniels O0.5 — add him to the same boxscore via extra fetch data.
+        summary["boxscore"]["players"][0]["statistics"][0]["athletes"].append(
+            {"athlete": {"displayName": "Jalon Daniels"}, "stats": ["1", "148"]}
+        )
+
+        with patch("automation.settlement._fetch_json", new=fake_fetch):
+            actions = await settle_espn_entries(object(), entries, now=now)
+
+        by_id = {action["entry_id"]: action for action in actions}
+        self.assertEqual(by_id["paper-nfl-hit"]["status"], "settled")
+        self.assertEqual(by_id["paper-nfl-hit"]["result"], "win")
+        self.assertEqual(by_id["paper-nfl-hit"]["payout"], 30)
+        self.assertEqual(by_id["paper-nfl-hit"]["provenance"], "espn_boxscore")
+        self.assertEqual(by_id["paper-nfl-miss"]["result"], "loss")
+        self.assertEqual(by_id["paper-nfl-miss"]["payout"], 0)
 
 
 if __name__ == "__main__":

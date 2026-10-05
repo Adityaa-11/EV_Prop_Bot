@@ -466,14 +466,14 @@ class PaperEntryTests(unittest.TestCase):
 
 
 class SettlementTests(unittest.TestCase):
-    def test_void_stale_non_mlb_entry(self):
+    def test_void_stale_unsupported_sport(self):
         now = datetime(2026, 7, 14, 12, tzinfo=timezone.utc)
         lock_time = (now - timedelta(hours=24)).isoformat()
         entries = [
             {
-                "id": "paper-wnba",
+                "id": "paper-tennis",
                 "status": "open",
-                "sport": "WNBA",
+                "sport": "TENNIS",
                 "stake": 10,
                 "lock_time": lock_time,
             }
@@ -482,6 +482,21 @@ class SettlementTests(unittest.TestCase):
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0]["result"], "void")
         self.assertEqual(actions[0]["payout"], 10)
+        self.assertEqual(actions[0]["provenance"], "no_settlement_provider")
+
+    def test_nfl_does_not_void_before_settlement_timeout(self):
+        now = datetime(2026, 10, 5, 12, tzinfo=timezone.utc)
+        entries = [
+            {
+                "id": "paper-nfl",
+                "status": "open",
+                "sport": "NFL",
+                "stake": 10,
+                "lock_time": (now - timedelta(hours=24)).isoformat(),
+            }
+        ]
+        actions = void_stale_open_entries(entries, now=now, stale_hours=12)
+        self.assertEqual(actions, [])
 
     def test_stale_void_frees_capacity_for_new_entries(self):
         now = datetime(2026, 7, 14, 12, tzinfo=timezone.utc)
@@ -494,7 +509,7 @@ class SettlementTests(unittest.TestCase):
                         "id": f"paper-{index}",
                         "fingerprint": f"fp-{index}",
                         "platform": "underdog",
-                        "sport": "WNBA",
+                        "sport": "TENNIS",
                         "tier": "excellent",
                         "stake": 10,
                         "expected_roi": 12,
