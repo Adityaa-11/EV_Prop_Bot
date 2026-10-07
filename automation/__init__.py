@@ -1,6 +1,11 @@
 """Deterministic paper-trading automation."""
 
-from .paper import PaperPolicy, build_paper_entries, compute_paper_capacity
+from .paper import (
+    PaperPolicy,
+    build_paper_entries,
+    compute_paper_capacity,
+    player_names_from_entries,
+)
 from .delivery import deliver_paper_entry, deliver_ops_alert, deliver_live_status, format_paper_slip
 from .settlement import (
     evaluate_leg,
@@ -26,6 +31,7 @@ __all__ = [
     "build_paper_entries",
     "build_tennis_both_overs_entries",
     "compute_paper_capacity",
+    "player_names_from_entries",
     "deliver_paper_entry",
     "deliver_ops_alert",
     "deliver_live_status",

@@ -10,15 +10,11 @@ import aiohttp
 
 def webhook_for_platform(platform: str) -> str | None:
     if platform == "prizepicks":
-        return os.getenv("DISCORD_WEBHOOK_PRIZEPICKS")
+        return os.getenv("DISCORD_WEBHOOK_PRIZEPICKS") or None
     if platform == "underdog":
-        return os.getenv("DISCORD_WEBHOOK_UNDERDOG")
+        return os.getenv("DISCORD_WEBHOOK_UNDERDOG") or None
     if platform == "dabble":
-        return (
-            os.getenv("DISCORD_WEBHOOK_DABBLE")
-            or os.getenv("DISCORD_WEBHOOK_UNDERDOG")
-            or os.getenv("DISCORD_WEBHOOK_PRIZEPICKS")
-        )
+        return os.getenv("DISCORD_WEBHOOK_DABBLE") or None
     return None
 
 
@@ -63,7 +59,19 @@ async def deliver_ops_alert(
         return {"success": False, "status": "failed", "error": str(exc)[:300]}
 
 
+def _dabble_tap_side(side: str) -> str:
+    value = (side or "").strip().upper()
+    if value in {"OVER", "MORE", "HIGHER"}:
+        return "More"
+    if value in {"UNDER", "LESS", "LOWER"}:
+        return "Less"
+    return side or "?"
+
+
 def format_paper_slip(entry: dict[str, Any]) -> dict[str, Any]:
+    platform = str(entry.get("platform") or "").lower()
+    if platform == "dabble":
+        return format_dabble_tap_card(entry, paper=True)
     legs = "\n".join(
         (
             f"• **{leg['player_name']}** — {leg['side']} {leg['line']} "
@@ -87,6 +95,37 @@ def format_paper_slip(entry: dict[str, Any]) -> dict[str, Any]:
                 "title": f"Paper Slip · {entry['sport']} · {entry['platform'].title()}",
                 "description": description,
                 "color": 0x22C55E if entry.get("tier") == "excellent" else 0x3B82F6,
+            }
+        ]
+    }
+
+
+def format_dabble_tap_card(entry: dict[str, Any], *, paper: bool) -> dict[str, Any]:
+    stake = float(entry.get("stake") or 5)
+    tap_legs = []
+    for index, leg in enumerate(entry.get("legs") or [], start=1):
+        tap_legs.append(
+            f"**Leg {index}:** {leg.get('player_name')} · "
+            f"{_dabble_tap_side(str(leg.get('side')))} {leg.get('line')} "
+            f"{leg.get('stat_type')}"
+        )
+    banner = "**PAPER — NO REAL WAGER (tap backup)**" if paper else "**DABBLE TAP CARD**"
+    description = (
+        f"{banner}\n"
+        f"Open Dabble → **All-In 2-pick** · 3x\n"
+        f"Stake: **${stake:.2f}** → **${float(entry.get('potential_payout') or stake * 3):.2f}**\n"
+        f"ROI: **{float(entry.get('expected_roi') or 0):.2f}%** · Tier: **{str(entry.get('tier') or '').title()}**\n"
+        + "\n".join(tap_legs)
+        + f"\nLocks: `{entry.get('lock_time')}`\n"
+        f"Slip ID: `{entry.get('id')}`\n"
+        f"**Tap only if GPS shows Georgia.** One player, one slip. Skip if that player was already used today."
+    )
+    return {
+        "embeds": [
+            {
+                "title": f"Dabble All-In · {entry.get('sport')} · tap on phone",
+                "description": description,
+                "color": 0x22C55E if entry.get("tier") == "excellent" else 0xF59E0B,
             }
         ]
     }
@@ -143,6 +182,14 @@ def format_live_slip(
     )
     if extra:
         description = f"{description}\n{extra}"
+    if str(entry.get("platform") or "").lower() == "dabble":
+        payload = format_dabble_tap_card(entry, paper=False)
+        payload["embeds"][0]["description"] = (
+            f"**{status_label}{shadow}**\n" + payload["embeds"][0]["description"]
+        )
+        if extra:
+            payload["embeds"][0]["description"] += f"\n{extra}"
+        return payload
     color_map = {
         "LIVE — SUBMITTING": 0xF59E0B,
         "LIVE — PLACED": 0x22C55E,

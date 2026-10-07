@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -73,6 +74,60 @@ class DeliveryFormatTests(unittest.TestCase):
         self.assertIn("PAPER — NO REAL WAGER", description)
         self.assertIn("Version: **V3**", description)
         self.assertIn("paper-1", description)
+
+
+class DabbleDeliveryTests(unittest.TestCase):
+    def test_dabble_webhook_does_not_fall_through(self):
+        from automation.delivery import webhook_for_platform
+
+        with patch.dict(
+            os.environ,
+            {
+                "DISCORD_WEBHOOK_DABBLE": "",
+                "DISCORD_WEBHOOK_UNDERDOG": "https://discord.com/api/webhooks/ud",
+                "DISCORD_WEBHOOK_PRIZEPICKS": "https://discord.com/api/webhooks/pp",
+            },
+            clear=False,
+        ):
+            self.assertIsNone(webhook_for_platform("dabble"))
+
+    def test_dabble_slip_is_a_phone_tap_card(self):
+        payload = format_paper_slip(
+            {
+                "id": "paper-dabble-1",
+                "platform": "dabble",
+                "sport": "NFL",
+                "tier": "excellent",
+                "stake": 5,
+                "potential_payout": 15,
+                "expected_roi": 12.5,
+                "lock_time": "2026-10-11T17:00:00+00:00",
+                "legs": [
+                    {
+                        "player_name": "Geno Smith",
+                        "side": "OVER",
+                        "line": 1.5,
+                        "stat_type": "Pass TDs",
+                        "win_probability": 60,
+                        "book_count": 4,
+                    },
+                    {
+                        "player_name": "Jordan Love",
+                        "side": "UNDER",
+                        "line": 245.5,
+                        "stat_type": "Pass Yards",
+                        "win_probability": 59,
+                        "book_count": 3,
+                    },
+                ],
+            }
+        )
+        description = payload["embeds"][0]["description"]
+        self.assertIn("PAPER — NO REAL WAGER", description)
+        self.assertIn("All-In 2-pick", description)
+        self.assertIn("More 1.5", description)
+        self.assertIn("Less 245.5", description)
+        self.assertIn("GPS shows Georgia", description)
 
 
 class SettlementMathTests(unittest.TestCase):

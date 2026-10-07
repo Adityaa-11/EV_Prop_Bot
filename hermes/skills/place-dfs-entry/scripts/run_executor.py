@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Poll Railway for pending live entries and drive Playwright placement."""
+"""Poll Railway for pending live entries and drive Playwright/Appium placement."""
 
 from __future__ import annotations
 
@@ -40,6 +40,18 @@ def request_json(
     except urllib.error.HTTPError as error:
         payload = json.loads(error.read() or b"{}")
         return error.code, payload
+
+
+def placer_script(platform: str) -> str:
+    """Return the placer filename. Dabble must never fall through to Underdog."""
+    name = (platform or "prizepicks").lower()
+    if name == "prizepicks":
+        return "place_prizepicks.py"
+    if name == "underdog":
+        return "place_underdog.py"
+    if name == "dabble":
+        return "place_dabble.py"
+    raise ValueError(f"unsupported_platform:{platform}")
 
 
 def heartbeat(base_url: str, key: str) -> None:
@@ -85,7 +97,20 @@ def main() -> int:
 
         claimed = claim_payload.get("entry") or entry
         platform = (claimed.get("platform") or "prizepicks").lower()
-        script = "place_prizepicks.py" if platform == "prizepicks" else "place_underdog.py"
+        try:
+            script = placer_script(platform)
+        except ValueError as exc:
+            result_body = {"status": "failed", "error": str(exc)[:500]}
+            request_json(
+                base_url,
+                f"/api/hermes/execution/{urllib.parse.quote(entry_id)}/result",
+                method="POST",
+                body=result_body,
+                key=key,
+            )
+            print(f"{entry_id}: {result_body['status']}")
+            errors += 1
+            continue
         env = os.environ.copy()
         env["ENTRY_JSON"] = json.dumps(claimed)
         env["EXECUTION_SHADOW_MODE"] = "true" if shadow else "false"

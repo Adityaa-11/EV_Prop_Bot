@@ -42,6 +42,7 @@ from automation import (
     deliver_ops_alert,
     dry_spell_should_alert,
     platform_play_counts,
+    player_names_from_entries,
     settle_open_entries,
     should_send_alert,
     void_stale_open_entries,
@@ -121,14 +122,15 @@ PAPER_POLICY = PaperPolicy(
     max_open_entries=int(os.getenv("PAPER_MAX_OPEN_ENTRIES", "50")),
     max_far_open_entries=int(os.getenv("PAPER_MAX_FAR_OPEN_ENTRIES", "50")),
     near_lock_hours=float(os.getenv("PAPER_NEAR_LOCK_HOURS", "48")),
-    min_leg_win=float(os.getenv("PAPER_MIN_LEG_WIN", "55")),
+    min_leg_win=float(os.getenv("PAPER_MIN_LEG_WIN", "57.7")),
     min_leg_books=int(os.getenv("PAPER_MIN_LEG_BOOKS", "3")),
     max_leg_dispersion=float(os.getenv("PAPER_MAX_LEG_DISPERSION", "4")),
     require_line_stability=os.getenv("PAPER_REQUIRE_LINE_STABILITY", "false").lower()
     in {"1", "true", "yes"},
-    excellent_roi=float(os.getenv("PAPER_EXCELLENT_ROI", "-10")),
-    strong_roi=float(os.getenv("PAPER_STRONG_ROI", "-10")),
+    excellent_roi=float(os.getenv("PAPER_EXCELLENT_ROI", "0")),
+    strong_roi=float(os.getenv("PAPER_STRONG_ROI", "0")),
     max_entries_per_lock_time=int(os.getenv("PAPER_MAX_ENTRIES_PER_LOCK", "2")),
+    max_entries_per_player=int(os.getenv("PAPER_MAX_ENTRIES_PER_PLAYER", "1")),
 )
 LIVE_ENTRY_POLICY = PaperPolicy(
     starting_bankroll=PAPER_POLICY.starting_bankroll,
@@ -143,6 +145,7 @@ LIVE_ENTRY_POLICY = PaperPolicy(
     in {"1", "true", "yes"},
     excellent_roi=float(os.getenv("LIVE_EXCELLENT_ROI", "10")),
     strong_roi=float(os.getenv("LIVE_STRONG_ROI", "5")),
+    max_entries_per_player=int(os.getenv("LIVE_MAX_ENTRIES_PER_PLAYER", "1")),
 )
 PAPER_DAILY_SCAN_CAP = int(os.getenv("PAPER_DAILY_SCAN_CAP", "100"))
 # Keep headroom so far-out NFL/CFB scans cannot exhaust the whole day.
@@ -151,7 +154,7 @@ PAPER_SPORT_DAILY_SCAN_CAP = int(os.getenv("PAPER_SPORT_DAILY_SCAN_CAP", "40"))
 # One-shot boot reset token. Change this to force another budget clear on deploy.
 PAPER_SCAN_BUDGET_RESET_TOKEN = os.getenv(
     "PAPER_SCAN_BUDGET_RESET_TOKEN",
-    "v31-55-rescans-20260914",
+    "v32-577-dabble-android-20261006",
 )
 PAPER_DRY_SPELL_HOURS = float(os.getenv("PAPER_DRY_SPELL_HOURS", "36"))
 # How far ahead the scheduler may spend Odds API quota. Align with near-lock
@@ -3050,6 +3053,7 @@ async def run_paper_tick(sport: str) -> dict[str, Any]:
             daily_profit=summary["daily_profit"],
             open_near=horizon["near"],
             open_far=horizon["far"],
+            reserved_player_names=player_names_from_entries(store.list_open_paper_entries()),
         )
         created_entries = []
         for entry in build["entries"]:

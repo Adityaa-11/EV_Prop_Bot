@@ -1,12 +1,12 @@
 ---
 name: place-dfs-entry
-description: Use when live execution is enabled and the backend has pending approved DFS entries. Poll the execution queue, place exact slips on PrizePicks or Underdog with Playwright, and report submitted or failed results.
-version: 1.0.0
+description: Use when live execution is enabled and the backend has pending approved DFS entries. Poll the execution queue, place exact slips on PrizePicks or Underdog with Playwright, or shadow/place Dabble on a Georgia Android via Appium, and report submitted or failed results.
+version: 1.1.0
 author: EV Dashboard
 license: MIT
 metadata:
   hermes:
-    tags: [live-execution, prizepicks, underdog, playwright]
+    tags: [live-execution, prizepicks, underdog, dabble, playwright, appium]
     related_skills: [fetch-ev-candidates]
     requires_toolsets: [terminal]
 ---
@@ -35,13 +35,25 @@ Execute backend-approved live entries. The FastAPI backend alone decides eligibi
 - Never modify legs, stake, tier, or platform from the payload
 - Never recalculate EV or add extra picks
 - One claim per entry; always POST a result
+- `platform=dabble` must run `place_dabble.py`, never Underdog
 
-## Playwright
+## Playwright (PrizePicks / Underdog)
 
 Use `scripts/place_prizepicks.py` or `scripts/place_underdog.py` with persistent browser profiles:
 
 - `PP_BROWSER_PROFILE` for PrizePicks
 - `UD_BROWSER_PROFILE` for Underdog
+
+## Appium (Dabble Android)
+
+Dabble is app-only. A real Android 7+ must stay USB-plugged into the Atlanta Mac Mini with GPS on.
+
+1. `python scripts/check_android.py` must report `ok: true`
+2. Log into Dabble once on the phone (All-In visible in Georgia)
+3. `appium --port 4723`
+4. `EXECUTION_SHADOW_MODE=true python scripts/run_executor.py`
+
+Shadow screenshots both legs and does **not** tap Submit. Do not enable `LIVE_EXECUTION_ENABLED` until that pass works. Do not call Dabble's private submit API.
 
 ## Verification
 

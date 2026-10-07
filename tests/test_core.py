@@ -225,7 +225,7 @@ class PaperEntryTests(unittest.TestCase):
         # 62/62 @ 3x ≈ 15.3% ROI; must clear the V3.1 ~0.5% gate.
         self.assertGreaterEqual(result["entries"][0]["expected_roi"], 0.5)
 
-    def test_v31_allows_break_even_pairs_that_old_8pct_gate_blocked(self):
+    def test_default_floor_rejects_55_percent_negative_roi_pairs(self):
         now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)
         game_time = (now + timedelta(hours=2)).isoformat()
         plays = [
@@ -240,7 +240,7 @@ class PaperEntryTests(unittest.TestCase):
             open_entries=0,
             now=now,
         )
-        allowed = build_paper_entries(
+        defaulted = build_paper_entries(
             plays,
             stability_for=lambda _: {"stable": True},
             policy=PaperPolicy(),
@@ -249,10 +249,8 @@ class PaperEntryTests(unittest.TestCase):
             now=now,
         )
         self.assertEqual(blocked["entries"], [])
-        self.assertEqual(len(allowed["entries"]), 1)
-        # 55/55 @ 3x ≈ -9.25% model ROI; volume mode intentionally allows it.
-        self.assertLess(allowed["entries"][0]["expected_roi"], 0)
-        self.assertGreaterEqual(allowed["entries"][0]["expected_roi"], -10)
+        self.assertEqual(defaulted["entries"], [])
+        self.assertEqual(defaulted["reason"], "no_qualifying_entry")
 
     def test_prefers_higher_roi_and_excellent_before_weaker_slips(self):
         now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)
@@ -306,6 +304,45 @@ class PaperEntryTests(unittest.TestCase):
         self.assertEqual(len(result["entries"]), 2)
         rois = [entry["expected_roi"] for entry in result["entries"]]
         self.assertEqual(rois, sorted(rois, reverse=True))
+
+    def test_caps_one_slip_per_player_per_slate(self):
+        now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)
+        lock = (now + timedelta(hours=2)).isoformat()
+        plays = [
+            paper_play("g1", "Geno Smith", "event-1", 62, 3, 2, lock),
+            paper_play("a1", "A One", "event-2", 61, 3, 2, lock),
+            paper_play("g2", "Geno Smith", "event-3", 60, 3, 2, lock),
+            paper_play("b1", "B One", "event-4", 59, 3, 2, lock),
+        ]
+        result = build_paper_entries(
+            plays,
+            stability_for=lambda _: {"stable": True},
+            policy=PaperPolicy(max_entries_per_lock_time=4, max_entries_per_player=1),
+            daily_staked=0,
+            open_entries=0,
+            now=now,
+        )
+        self.assertEqual(len(result["entries"]), 1)
+        names = {leg["player_name"] for entry in result["entries"] for leg in entry["legs"]}
+        self.assertEqual(names, {"Geno Smith", "A One"})
+
+    def test_reserved_open_player_blocks_a_second_slip(self):
+        now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)
+        lock = (now + timedelta(hours=2)).isoformat()
+        plays = [
+            paper_play("g1", "Geno Smith", "event-1", 62, 3, 2, lock),
+            paper_play("a1", "A One", "event-2", 61, 3, 2, lock),
+        ]
+        result = build_paper_entries(
+            plays,
+            stability_for=lambda _: {"stable": True},
+            policy=PaperPolicy(),
+            daily_staked=0,
+            open_entries=0,
+            reserved_player_names={"geno smith"},
+            now=now,
+        )
+        self.assertEqual(result["entries"], [])
 
     def test_dabble_platform_pairs_into_v3_paper(self):
         now = datetime(2026, 7, 12, 16, tzinfo=timezone.utc)

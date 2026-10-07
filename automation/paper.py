@@ -19,19 +19,19 @@ class PaperPolicy:
     max_open_entries: int = 50
     max_far_open_entries: int = 50
     near_lock_hours: float = 48.0
-    # 2-leg 3x power break-even is ~57.7% true. User wants volume at the 55% model band
-    # that other Discord bots surface; ROI gate below allows those pairs to place.
-    min_leg_win: float = 55.0
+    # 2-leg 3x break-even is ~57.735% independent. Require true +EV pairs.
+    min_leg_win: float = 57.7
     min_leg_books: int = 3
     max_leg_dispersion: float = 4.0
     require_line_stability: bool = False
-    # 55/55 @ 3x ≈ -9.25% model ROI. Keep best-first ranking, but do not block the
-    # board the user is seeing (~55-56% singles) from ever pairing.
-    excellent_roi: float = -10.0
-    strong_roi: float = -10.0
+    # 57.7/57.7 @ 3x is slightly negative; ROI >= 0 keeps only +EV tickets.
+    excellent_roi: float = 0.0
+    strong_roi: float = 0.0
     strong_lock_minutes: int = 30
     # Same lock window = shared game environment; avoid spraying correlated slips.
     max_entries_per_lock_time: int = 2
+    # One player on at most one open/new slip per slate (stops Geno x5).
+    max_entries_per_player: int = 1
 
 
 PAYOUTS = {
@@ -101,6 +101,20 @@ def _leg_tier(play: dict[str, Any], policy: PaperPolicy) -> str | None:
     ):
         return "playable"
     return None
+
+
+def _player_key(name: str | None) -> str:
+    return " ".join((name or "").split()).lower()
+
+
+def player_names_from_entries(entries: list[dict[str, Any]]) -> set[str]:
+    names: set[str] = set()
+    for entry in entries:
+        for leg in entry.get("legs") or []:
+            key = _player_key(leg.get("player_name"))
+            if key:
+                names.add(key)
+    return names
 
 
 def _compatible(first: dict[str, Any], second: dict[str, Any]) -> bool:
@@ -192,6 +206,7 @@ def build_paper_entries(
     open_entries: int = 0,
     open_near: int | None = None,
     open_far: int | None = None,
+    reserved_player_names: set[str] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Return the best non-overlapping slips while allowing complete abstention."""
@@ -326,6 +341,9 @@ def build_paper_entries(
     )
     selected = []
     used_candidates: set[str] = set()
+    used_players: set[str] = {
+        _player_key(name) for name in (reserved_player_names or set()) if _player_key(name)
+    }
     lock_counts: dict[str, int] = {}
     remaining_stake = stake_slots
     remaining_near = near_slots
@@ -333,6 +351,10 @@ def build_paper_entries(
     for entry in combinations:
         candidate_ids = {leg["candidate_id"] for leg in entry["legs"]}
         if candidate_ids & used_candidates:
+            continue
+        player_keys = {_player_key(leg.get("player_name")) for leg in entry["legs"]}
+        player_keys.discard("")
+        if policy.max_entries_per_player <= 1 and player_keys & used_players:
             continue
         lock_key = str(entry.get("lock_time") or "")
         if lock_counts.get(lock_key, 0) >= policy.max_entries_per_lock_time:
@@ -349,6 +371,7 @@ def build_paper_entries(
         remaining_stake -= 1
         selected.append(entry)
         used_candidates.update(candidate_ids)
+        used_players.update(player_keys)
         lock_counts[lock_key] = lock_counts.get(lock_key, 0) + 1
         if remaining_stake <= 0 or (remaining_near <= 0 and remaining_far <= 0):
             break
