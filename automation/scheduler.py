@@ -132,6 +132,10 @@ class PaperScheduler:
             "settlement": settlement,
             "created_count": sum(int(tick.get("created_count") or 0) for tick in ticks),
         }
+        try:
+            result["storage_prune"] = self.store.prune_scan_history(compact=False)
+        except Exception as exc:  # noqa: BLE001
+            result["storage_prune"] = {"error": str(exc)[:300]}
         self.store.set_state("paper_scheduler", result)
         self.store.release_lease("paper_scheduler", owner=self.worker_id)
         if self.after_cycle is not None:

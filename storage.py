@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
+import tempfile
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -1141,6 +1143,114 @@ class PipelineStore:
                 "SELECT COUNT(*) AS count FROM paper_entries WHERE delivery_status = 'failed'"
             ).fetchone()
         return int(row["count"] or 0)
+
+    def database_file_bytes(self) -> int:
+        if not self.database_path.exists():
+            return 0
+        total = self.database_path.stat().st_size
+        for suffix in ("-wal", "-shm"):
+            extra = Path(str(self.database_path) + suffix)
+            if extra.exists():
+                total += extra.stat().st_size
+        return total
+
+    def prune_scan_history(
+        self,
+        *,
+        observation_days: int | None = None,
+        runs_keep: int | None = None,
+        compact: bool = False,
+    ) -> dict[str, Any]:
+        """Delete old scan snapshots. Never touches paper_entries / ledger."""
+        keep_days = max(
+            1,
+            int(
+                observation_days
+                if observation_days is not None
+                else os.getenv("PAPER_SCAN_HISTORY_DAYS", "3")
+            ),
+        )
+        keep_runs = max(
+            10,
+            int(runs_keep if runs_keep is not None else os.getenv("PAPER_SCAN_RUNS_KEEP", "40")),
+        )
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_days)).isoformat()
+        before = self.database_file_bytes()
+        with self._lock:
+            connection = self._connect()
+            try:
+                obs_deleted = connection.execute(
+                    "DELETE FROM candidate_observations WHERE observed_at < ?",
+                    (cutoff,),
+                ).rowcount
+                run_deleted = connection.execute(
+                    """
+                    DELETE FROM pipeline_runs
+                    WHERE id NOT IN (
+                        SELECT id FROM pipeline_runs ORDER BY id DESC LIMIT ?
+                    )
+                    """,
+                    (keep_runs,),
+                ).rowcount
+                remaining_obs = connection.execute(
+                    "SELECT COUNT(*) AS count FROM candidate_observations"
+                ).fetchone()["count"]
+                remaining_runs = connection.execute(
+                    "SELECT COUNT(*) AS count FROM pipeline_runs"
+                ).fetchone()["count"]
+                remaining_entries = connection.execute(
+                    "SELECT COUNT(*) AS count FROM paper_entries"
+                ).fetchone()["count"]
+                connection.commit()
+            finally:
+                connection.close()
+            connection = self._connect()
+            try:
+                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            finally:
+                connection.close()
+        compacted = False
+        compact_error = None
+        if compact:
+            try:
+                self.compact_database()
+                compacted = True
+            except Exception as exc:  # noqa: BLE001
+                compact_error = str(exc)[:300]
+        return {
+            "observations_deleted": int(obs_deleted or 0),
+            "runs_deleted": int(run_deleted or 0),
+            "observations_kept": int(remaining_obs or 0),
+            "runs_kept": int(remaining_runs or 0),
+            "paper_entries_kept": int(remaining_entries or 0),
+            "observation_days": keep_days,
+            "runs_keep": keep_runs,
+            "bytes_before": before,
+            "bytes_after": self.database_file_bytes(),
+            "compacted": compacted,
+            "compact_error": compact_error,
+        }
+
+    def compact_database(self) -> None:
+        """Rebuild SQLite onto ephemeral disk, then swap onto the volume."""
+        dest = Path(tempfile.gettempdir()) / f"ev_bot_compact_{os.getpid()}.db"
+        dest.unlink(missing_ok=True)
+        with self._lock:
+            connection = self._connect()
+            try:
+                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                connection.execute("VACUUM INTO ?", (str(dest),))
+            finally:
+                connection.close()
+        if not dest.exists() or dest.stat().st_size <= 0:
+            raise RuntimeError("vacuum_into_failed")
+        staging = self.database_path.with_name(self.database_path.name + ".compact")
+        shutil.copy2(dest, staging)
+        os.replace(staging, self.database_path)
+        dest.unlink(missing_ok=True)
+        for suffix in ("-wal", "-shm"):
+            extra = Path(str(self.database_path) + suffix)
+            extra.unlink(missing_ok=True)
 
     def settlement_backlog_count(self) -> int:
         now = datetime.now(timezone.utc).isoformat()

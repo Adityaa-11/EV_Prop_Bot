@@ -3487,10 +3487,26 @@ async def hermes_execution_heartbeat(worker_id: str = Query(None)):
     return {"success": True}
 
 
+@app.post("/api/admin/storage/prune", dependencies=[Depends(require_admin_key)])
+async def admin_prune_scan_history(compact: bool = Query(True)):
+    """Drop old pipeline_runs / candidate_observations. Leaves paper slips alone."""
+    return {"success": True, **store.prune_scan_history(compact=compact)}
+
+
 @app.on_event("startup")
 async def start_paper_scheduler() -> None:
     global paper_scheduler
     _maybe_reset_scan_budget_on_boot()
+    try:
+        pruned = store.prune_scan_history(compact=True)
+        print(
+            f"[Storage] pruned scans obs-{pruned['observations_deleted']} "
+            f"runs-{pruned['runs_deleted']} "
+            f"{pruned['bytes_before']}→{pruned['bytes_after']}B "
+            f"compacted={pruned['compacted']}"
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[Storage] prune failed: {exc}")
     paper_scheduler = PaperScheduler(
         store=store,
         tick_sport=run_paper_tick,

@@ -428,5 +428,64 @@ class EspnSettlementTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(by_id["paper-nfl-miss"]["payout"], 0)
 
 
+class ScanPruneTests(unittest.TestCase):
+    def test_prune_drops_old_scans_and_keeps_paper_slips(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = PipelineStore(str(Path(directory) / "prune.db"))
+            now = datetime.now(timezone.utc)
+            for index in range(12):
+                store.save_run(
+                    "paper_scan",
+                    "nfl",
+                    "ok",
+                    {"index": index, "blob": "x" * 50},
+                )
+            play = paper_play(
+                "cand-1",
+                "Geno Smith",
+                "event-1",
+                60,
+                3,
+                2,
+                now.isoformat(),
+            )
+            store.record_candidate_observations([play])
+            old = (now - timedelta(days=10)).isoformat()
+            connection = store._connect()
+            try:
+                connection.execute(
+                    "UPDATE candidate_observations SET observed_at = ?",
+                    (old,),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            store.create_paper_entry(
+                {
+                    "id": "paper-keep",
+                    "fingerprint": "keep",
+                    "platform": "dabble",
+                    "sport": "nfl",
+                    "tier": "excellent",
+                    "stake": 10,
+                    "expected_roi": 8,
+                    "potential_payout": 30,
+                    "lock_time": now.isoformat(),
+                    "created_at": now.isoformat(),
+                    "legs": [],
+                }
+            )
+            result = store.prune_scan_history(
+                observation_days=3,
+                runs_keep=10,
+                compact=True,
+            )
+            self.assertGreaterEqual(result["runs_deleted"], 2)
+            self.assertEqual(result["observations_deleted"], 1)
+            self.assertEqual(result["paper_entries_kept"], 1)
+            self.assertTrue(result["compacted"])
+            self.assertEqual(store.list_paper_entries(10)[0]["id"], "paper-keep")
+
+
 if __name__ == "__main__":
     unittest.main()
