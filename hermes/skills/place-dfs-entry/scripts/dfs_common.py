@@ -21,7 +21,7 @@ def is_shadow_mode() -> bool:
 
 
 def stake_amount(entry: dict[str, Any]) -> float:
-    return float(entry.get("stake") or os.getenv("LIVE_STAKE", "5"))
+    return float(entry.get("stake") or os.getenv("LIVE_STAKE", "1"))
 
 
 def artifacts_dir() -> Path:

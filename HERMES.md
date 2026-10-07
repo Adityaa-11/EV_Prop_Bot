@@ -27,7 +27,7 @@ Env on Railway:
 EXECUTION_MODE=live
 LIVE_EXECUTION_ENABLED=true
 EXECUTION_SHADOW_MODE=true   # start true — navigate only, no submit
-LIVE_STAKE=5
+LIVE_STAKE=1
 LIVE_EXCELLENT_ONLY=true
 ```
 
@@ -83,7 +83,7 @@ Railway:
 EXECUTION_MODE=live
 LIVE_EXECUTION_ENABLED=true
 EXECUTION_SHADOW_MODE=false
-LIVE_STAKE=5
+LIVE_STAKE=1
 ```
 
 Mac Mini:

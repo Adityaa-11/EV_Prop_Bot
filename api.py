@@ -134,7 +134,7 @@ PAPER_POLICY = PaperPolicy(
 )
 LIVE_ENTRY_POLICY = PaperPolicy(
     starting_bankroll=PAPER_POLICY.starting_bankroll,
-    stake=float(os.getenv("LIVE_STAKE", os.getenv("PAPER_STAKE", "10"))),
+    stake=float(os.getenv("LIVE_STAKE", "1")),
     daily_stake_cap=PAPER_POLICY.daily_stake_cap,
     daily_loss_stop=PAPER_POLICY.daily_loss_stop,
     max_open_entries=int(os.getenv("LIVE_MAX_OPEN_ENTRIES", "1")),
@@ -206,7 +206,7 @@ LIVE_EXCELLENT_ONLY = os.getenv("LIVE_EXCELLENT_ONLY", "true").lower() in {
     "true",
     "yes",
 }
-LIVE_STAKE = float(os.getenv("LIVE_STAKE", os.getenv("PAPER_STAKE", "10")))
+LIVE_STAKE = float(os.getenv("LIVE_STAKE", "1"))
 EXECUTION_WORKER_ID = os.getenv("EXECUTION_WORKER_ID", "hermes-mac-mini")
 EXECUTION_CLAIM_TTL_SECONDS = int(os.getenv("EXECUTION_CLAIM_TTL_SECONDS", "900"))
 paper_scheduler: PaperScheduler | None = None
